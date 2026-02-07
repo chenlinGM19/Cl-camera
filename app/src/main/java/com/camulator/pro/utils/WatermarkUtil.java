@@ -32,16 +32,19 @@ public class WatermarkUtil {
         int h = src.getHeight();
         
         // 1. Calculate Layout Dimensions
-        // In Footer mode, the footer height is explicitly controlled by the slider (heightPercent).
-        // In Overlay mode, we calculate a virtual "zone" to size text proportionally.
-        int footerHeight = config.isFooterMode ? (int) (Math.max(w, h) * config.heightPercent) : 0;
+        // Height calculation: Clamp between 8% and 25% of image dimension to maintain aesthetics
+        float minH = Math.max(w, h) * 0.08f;
+        float maxH = Math.max(w, h) * 0.25f;
         
-        // Ensure footer isn't too tiny to read
-        if (config.isFooterMode && footerHeight < Math.max(w, h) * 0.05f) {
-             footerHeight = (int)(Math.max(w, h) * 0.05f); 
-        }
+        // If overlay, we treat height as a virtual zone at the bottom
+        int footerHeight = config.isFooterMode 
+                ? (int) (Math.max(w, h) * config.heightPercent) 
+                : (int) (Math.max(w, h) * 0.15f); // Fixed virtual height for overlay sizing
 
-        int outputH = h + footerHeight;
+        // Enforce minimum aesthetic height if in footer mode
+        if (config.isFooterMode && footerHeight < minH) footerHeight = (int) minH;
+        
+        int outputH = config.isFooterMode ? h + footerHeight : h;
         
         Bitmap output = Bitmap.createBitmap(w, outputH, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(output);
@@ -50,189 +53,206 @@ public class WatermarkUtil {
         canvas.drawBitmap(src, 0, 0, null);
         
         // 3. Setup Colors
-        int bgColor = config.isWhiteBg ? 0xFFFFFFFF : 0xFF121212; // Slightly softer black
-        int mainTextColor = config.isWhiteBg ? 0xFF212121 : 0xFFEEEEEE;
-        int subTextColor = config.isWhiteBg ? 0xFF757575 : 0xFF9E9E9E;
-        int accentColor = 0xFFD32F2F; // Leica-ish Red line
+        int bgColor = config.isWhiteBg ? 0xFFFFFFFF : 0xFF121212; // Softer black
+        int mainTextColor = config.isWhiteBg ? 0xFF000000 : 0xFFFFFFFF;
+        int subTextColor = config.isWhiteBg ? 0xFF666666 : 0xFFAAAAAA;
+        int dividerColor = config.isWhiteBg ? 0xFFDDDDDD : 0xFF333333;
         
         Paint bgPaint = new Paint();
         bgPaint.setColor(bgColor);
         bgPaint.setStyle(Paint.Style.FILL);
         
-        // 4. Draw Footer / Overlay Scrim
+        // 4. Draw Footer / Overlay Gradient
+        float startY = config.isFooterMode ? h : h - footerHeight;
+        
         if (config.isFooterMode) {
             canvas.drawRect(0, h, w, outputH, bgPaint);
         } else {
-            // Overlay Mode: Clean Gradient
-            int scrimHeight = (int) (h * 0.35f);
+            // High-quality gradient for overlay
             Paint scrimPaint = new Paint();
             scrimPaint.setShader(new LinearGradient(
-                    0, h - scrimHeight, 
+                    0, h - (footerHeight * 1.5f), 
                     0, h, 
                     0x00000000, 
                     0xCC000000, 
                     Shader.TileMode.CLAMP));
-            canvas.drawRect(0, h - scrimHeight, w, h, scrimPaint);
+            canvas.drawRect(0, h - (footerHeight * 1.5f), w, h, scrimPaint);
             
             mainTextColor = 0xFFFFFFFF;
-            subTextColor = 0xFFDDDDDD; 
+            subTextColor = 0xFFCCCCCC; 
+            dividerColor = 0xFF555555;
         }
         
-        // 5. Prepare Text Strings
+        // 5. Prepare Text Content
         String titleText = config.customText.isEmpty() ? "Camulator Pro" : config.customText;
         String modelText = android.os.Build.MODEL.toUpperCase();
-        if (modelText.length() > 10) modelText = android.os.Build.MANUFACTURER.toUpperCase();
-
-        // Combine date and location nicely
+        
         StringBuilder metaBuilder = new StringBuilder();
-        if (config.showDate && !config.dateStr.isEmpty()) {
-            metaBuilder.append(config.dateStr);
-        }
+        if (config.showDate && !config.dateStr.isEmpty()) metaBuilder.append(config.dateStr);
+        
         if (!config.locStr.isEmpty()) {
             if (metaBuilder.length() > 0) metaBuilder.append("  |  ");
             metaBuilder.append(config.locStr);
         }
         String metaText = metaBuilder.toString();
         String exifText = config.exifInfo;
+        if (exifText.isEmpty()) exifText = "RAW";
 
-        // 6. Typography & Sizing
-        // Base Unit calculation
-        float baseUnit = config.isFooterMode ? footerHeight : (Math.min(w, h) * 0.15f);
+        // 6. Dynamic Font Sizing (The key to "Aesthetics")
+        // Use the smaller of (Height based calculation) or (Width based calculation)
+        // This prevents massive text on tall/thin footers, or tiny text on wide footers.
         
-        float titleSize = baseUnit * 0.28f; 
-        float exifSize = baseUnit * 0.19f;
-        float metaSize = baseUnit * 0.17f;
-
-        // Paints
+        float containerH = footerHeight;
+        float paddingEdge = w * 0.04f; // 4% horizontal padding
+        
+        // Ratios relative to Footer Height
+        float titleTextSize = containerH * 0.32f; 
+        float exifTextSize = containerH * 0.22f;
+        float metaTextSize = containerH * 0.18f;
+        
+        // Cap max size relative to Image Width to avoid overflow on narrow phones
+        float maxTitleW = w * 0.45f;
+        if (titleTextSize > w * 0.08f) titleTextSize = w * 0.08f;
+        
+        // Setup Paints
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(mainTextColor);
         titlePaint.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
-        titlePaint.setTextSize(titleSize);
-        // Letter spacing for "Premium" feel
+        titlePaint.setTextSize(titleTextSize);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            titlePaint.setLetterSpacing(0.05f);
+            titlePaint.setLetterSpacing(0.03f);
         }
 
         Paint exifPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         exifPaint.setColor(mainTextColor); 
-        exifPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); // Bold EXIF looks better
-        exifPaint.setTextSize(exifSize);
+        exifPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        exifPaint.setTextSize(exifTextSize);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            exifPaint.setLetterSpacing(0.02f);
+        }
 
         Paint metaPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         metaPaint.setColor(subTextColor);
         metaPaint.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        metaPaint.setTextSize(metaSize);
+        metaPaint.setTextSize(metaTextSize);
 
-        // Divider Line Paint
-        Paint linePaint = new Paint();
-        linePaint.setColor(subTextColor); 
-        linePaint.setStrokeWidth(baseUnit * 0.02f); 
-        linePaint.setAlpha(80);
+        Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        dividerPaint.setColor(dividerColor);
+        dividerPaint.setStrokeWidth(Math.max(2f, w * 0.002f)); // Line width scales slightly with resolution
 
-        // Shadows for Overlay mode
+        // Shadows for Overlay mode clarity
         if (!config.isFooterMode) {
-            titlePaint.setShadowLayer(4, 2, 2, 0xAA000000);
-            exifPaint.setShadowLayer(3, 1, 1, 0xAA000000);
-            metaPaint.setShadowLayer(3, 1, 1, 0xAA000000);
+            titlePaint.setShadowLayer(6, 0, 2, 0x88000000);
+            exifPaint.setShadowLayer(4, 0, 1, 0x88000000);
+            metaPaint.setShadowLayer(4, 0, 1, 0x88000000);
         }
 
-        // 7. Layout Calculation
-        float paddingX = w * 0.05f; // 5% padding from sides
+        // 7. Calculate Drawing Positions
         
-        float centerY; 
-        if (config.isFooterMode) {
-            centerY = h + (footerHeight / 2f);
-        } else {
-            centerY = h - (baseUnit * 0.6f); 
-        }
-
-        // Font Metrics for vertical centering
+        // Center Y of the footer area
+        float centerY = startY + (footerHeight / 2f);
+        
+        // Get Text Heights for vertical centering corrections
         Paint.FontMetrics titleFm = titlePaint.getFontMetrics();
-        float titleHalfH = (titleFm.descent - titleFm.ascent) / 2f - titleFm.descent;
+        float titleCapHeight = Math.abs(titleFm.ascent); // Height from baseline to top
         
         Paint.FontMetrics exifFm = exifPaint.getFontMetrics();
-        float exifH = exifFm.descent - exifFm.ascent;
+        float exifCapHeight = Math.abs(exifFm.ascent);
+        
+        Paint.FontMetrics metaFm = metaPaint.getFontMetrics();
+        float metaCapHeight = Math.abs(metaFm.ascent);
 
-        // --- Drawing Logic ---
+        // --- Layout Logic ---
 
         if (config.align == 1) { 
-            // === CENTER ALIGN ===
-            // Stacked: Title -> EXIF -> Meta
+            // === CENTER ALIGN (Minimalist) ===
             titlePaint.setTextAlign(Paint.Align.CENTER);
             exifPaint.setTextAlign(Paint.Align.CENTER);
             metaPaint.setTextAlign(Paint.Align.CENTER);
             
-            float totalH = (titleFm.descent - titleFm.ascent) + (exifH) + (metaSize * 2f);
-            float startY = centerY - (totalH / 2f) + Math.abs(titleFm.ascent);
+            // Layout: Title Top, Info Bottom
+            float spacing = footerHeight * 0.15f;
+            float blockH = titleCapHeight + spacing + exifCapHeight;
+            float blockStartY = centerY - (blockH / 2f) + titleCapHeight;
+
+            canvas.drawText(titleText, w / 2f, blockStartY, titlePaint);
             
-            canvas.drawText(titleText, w / 2f, startY, titlePaint);
-            
-            startY += titleFm.descent + (baseUnit * 0.15f) + Math.abs(exifFm.ascent);
-            canvas.drawText(exifText.isEmpty() ? modelText : exifText, w / 2f, startY, exifPaint);
-            
-            startY += exifFm.descent + (baseUnit * 0.1f) + Math.abs(metaPaint.getFontMetrics().ascent);
-            canvas.drawText(metaText, w / 2f, startY, metaPaint);
+            // Combine Exif and Meta for center look
+            String combinedInfo = exifText + "  •  " + metaText;
+            canvas.drawText(combinedInfo, w / 2f, blockStartY + spacing + exifCapHeight, metaPaint);
 
         } else if (config.align == 2) {
-            // === RIGHT ALIGN ===
-            // Everything right aligned
-            float rightX = w - paddingX;
+            // === RIGHT ALIGN (Clean) ===
+            float rightX = w - paddingEdge;
             titlePaint.setTextAlign(Paint.Align.RIGHT);
             exifPaint.setTextAlign(Paint.Align.RIGHT);
             metaPaint.setTextAlign(Paint.Align.RIGHT);
             
-            canvas.drawText(titleText, rightX, centerY + titleHalfH - (exifH * 0.8f), titlePaint);
-            
-            // Divider
-            if (config.isFooterMode) {
-                 float lineY = centerY + titleHalfH + (baseUnit * 0.1f);
-                 canvas.drawLine(rightX, lineY, rightX - (w*0.3f), lineY, linePaint);
-            }
-            
-            canvas.drawText(exifText + " " + metaText, rightX, centerY + titleHalfH + (exifH * 1.2f), exifPaint);
+            canvas.drawText(titleText, rightX, centerY - (containerH * 0.1f), titlePaint);
+            canvas.drawText(exifText + " | " + metaText, rightX, centerY + (containerH * 0.25f), metaPaint);
 
         } else {
-            // === LEFT / SPLIT ALIGN (Default Professional Look) ===
-            // Left: Title (Logo)
-            // Right: Data (EXIF top, Date/Loc bottom)
-            // Divider: Vertical line in between
+            // === LEFT / SPLIT PROFESSIONAL (Default) ===
+            // This is the classic "Leica/Xiaomi" style layout
+            // Left: Logo/Title
+            // Middle: Vertical Divider
+            // Right: Exif (Top) / Date+Loc (Bottom)
             
-            float leftX = paddingX;
-            float rightX = w - paddingX;
+            float leftX = paddingEdge;
+            float rightX = w - paddingEdge;
             
+            // 1. Draw Left Title (Vertically Centered)
             titlePaint.setTextAlign(Paint.Align.LEFT);
-            // Draw Title vertically centered
-            canvas.drawText(titleText, leftX, centerY + titleHalfH, titlePaint);
+            float titleY = centerY + (titleCapHeight / 2f) - (titleFm.descent / 2f);
+            canvas.drawText(titleText, leftX, titleY, titlePaint);
             
-            // Draw Right Side Data
+            // 2. Draw Right Data (Split Lines)
             exifPaint.setTextAlign(Paint.Align.RIGHT);
             metaPaint.setTextAlign(Paint.Align.RIGHT);
             
-            float dataCenterY = centerY;
+            // Calculate vertical positions for two lines
+            float gap = containerH * 0.12f; // Gap between Exif and Meta
+            float rightBlockH = exifCapHeight + gap + metaCapHeight;
             
-            // EXIF Line
-            canvas.drawText(exifText, rightX, dataCenterY - (baseUnit * 0.08f), exifPaint);
+            float exifY = centerY - (rightBlockH / 2f) + exifCapHeight;
+            float metaY = exifY + gap + metaCapHeight * 0.8f; // Slight adjustment for baseline
             
-            // Meta Line
-            canvas.drawText(metaText, rightX, dataCenterY + exifH + (baseUnit * 0.08f), metaPaint);
+            canvas.drawText(exifText, rightX, exifY, exifPaint);
+            canvas.drawText(metaText, rightX, metaY, metaPaint);
             
-            // Vertical Divider
+            // 3. Vertical Divider
+            // Calculate position: right side of title + padding, or strictly based on image width?
+            // Let's place it nicely between the two blocks.
+            
             if (config.isFooterMode) {
                 float titleWidth = titlePaint.measureText(titleText);
-                float lineX = leftX + titleWidth + (w * 0.04f);
+                float maxRightW = Math.max(exifPaint.measureText(exifText), metaPaint.measureText(metaText));
                 
-                // Only draw divider if it doesn't overlap right text
-                float maxRightTextW = Math.max(exifPaint.measureText(exifText), metaPaint.measureText(metaText));
-                if (lineX < (rightX - maxRightTextW - (w * 0.04f))) {
-                    float lineH = baseUnit * 0.5f;
-                    canvas.drawLine(lineX, centerY - lineH/2, lineX, centerY + lineH/2, linePaint);
+                // Ideal X is somewhat towards the left to give the data section more room
+                float dividerX = leftX + titleWidth + (w * 0.06f);
+                
+                // Ensure divider doesn't hit right text
+                if (dividerX < (rightX - maxRightW - (w * 0.04f))) {
+                    float lineH = containerH * 0.55f; // Line is 55% height of footer
+                    float lineTop = centerY - (lineH / 2f);
+                    float lineBottom = centerY + (lineH / 2f);
                     
-                    // Draw Model Name next to divider if space permits
+                    canvas.drawLine(dividerX, lineTop, dividerX, lineBottom, dividerPaint);
+                    
+                    // Optional: Draw Camera Model Name next to divider if there is space
                     Paint modelPaint = new Paint(metaPaint);
                     modelPaint.setColor(subTextColor);
                     modelPaint.setTextAlign(Paint.Align.LEFT);
                     modelPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-                    canvas.drawText(modelText, lineX + (w * 0.04f), centerY + titleHalfH, modelPaint);
+                    
+                    // Scale model text slightly smaller
+                    modelPaint.setTextSize(metaTextSize * 0.9f);
+                    
+                    // Only draw if plenty of space
+                    float availableSpace = (rightX - maxRightW) - dividerX;
+                    if (availableSpace > w * 0.15f) {
+                        canvas.drawText(modelText, dividerX + (w * 0.03f), titleY, modelPaint);
+                    }
                 }
             }
         }
