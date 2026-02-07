@@ -9,10 +9,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.graphics.Matrix;
 import android.location.Address;
 import android.location.Geocoder;
-import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,7 +21,6 @@ import android.util.Log;
 import android.util.Size;
 import android.view.View;
 import android.view.WindowInsets;
-import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -125,14 +122,11 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         
         try {
-            // Immersive Full Screen
+            // Immersive Full Screen - standard layout flags only
             getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                WindowInsetsController controller = getWindow().getInsetsController();
-                if (controller != null) {
-                    controller.hide(WindowInsets.Type.statusBars());
-                }
-            }
+            
+            // Note: WindowInsetsController code removed to prevent crashes on some Android 11+ devices.
+            // The theme 'Theme.CamulatorPro.Fullscreen' handles hiding the status bar implicitly.
             
             setContentView(R.layout.activity_main);
 
@@ -155,7 +149,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
             } catch (Exception e) {
-                Log.e("MainActivity", "Vibrator service failed", e);
+                // Ignore if service not available
             }
             
             fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
@@ -163,11 +157,10 @@ public class MainActivity extends AppCompatActivity {
                 curveView.setOnCurveChangeListener(this::triggerPreviewUpdate);
             }
 
-            // Hide raw preview, show overlay
+            // Ensure viewFinder is part of layout but invisible for our custom overlay
             if (viewFinder != null) {
-                viewFinder.setVisibility(View.INVISIBLE); 
-                viewFinder.setAlpha(0f);
                 viewFinder.setVisibility(View.VISIBLE);
+                viewFinder.setAlpha(0f);
             }
 
             loadDefaultPresets();
@@ -178,16 +171,36 @@ public class MainActivity extends AppCompatActivity {
             setupImportExport();
             cameraExecutor = Executors.newSingleThreadExecutor();
 
-            if (isCameraPermissionGranted()) {
-                startCamera();
-                checkAndRequestOptionalPermissions();
-                updateLocation();
-            } else {
-                requestPermissions();
+            // Delay camera start slightly to ensure layout is ready
+            if (ivPreviewOverlay != null) {
+                ivPreviewOverlay.post(() -> {
+                    try {
+                        if (isCameraPermissionGranted()) {
+                            startCamera();
+                            checkAndRequestOptionalPermissions();
+                            updateLocation();
+                        } else {
+                            requestPermissions();
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
             }
+
         } catch (Exception e) {
             e.printStackTrace();
-            Toast.makeText(this, "Error initializing app: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            try {
+                Toast.makeText(getApplicationContext(), "Error initializing app: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            } catch (Exception ignored) {}
+        }
+    }
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (cameraExecutor != null) {
+            cameraExecutor.shutdown();
         }
     }
     
@@ -222,19 +235,15 @@ public class MainActivity extends AppCompatActivity {
                 preview.setSurfaceProvider(viewFinder.getSurfaceProvider());
 
                 // 2. ImageAnalysis (Compat API)
-                // Use setTargetResolution instead of ResolutionSelector to avoid build issues
-                // 720p is good for performance
-                Size targetSize = (targetRatio == AspectRatio.RATIO_16_9) ? new Size(720, 1280) : new Size(720, 960);
-                
-                imageAnalysis = new ImageAnalysis.Builder()
-                        .setTargetResolution(targetSize)
+                ImageAnalysis.Builder analysisBuilder = new ImageAnalysis.Builder()
+                        .setTargetAspectRatio(targetRatio)
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                        .build();
-
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
+                
+                imageAnalysis = analysisBuilder.build();
                 imageAnalysis.setAnalyzer(cameraExecutor, this::analyzeImage);
 
-                // 3. ImageCapture (Full Quality)
+                // 3. ImageCapture
                 imageCapture = new ImageCapture.Builder()
                         .setTargetAspectRatio(targetRatio)
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
@@ -248,19 +257,18 @@ public class MainActivity extends AppCompatActivity {
                     calculateBaseFocalLength();
                     applyFocalLengthZoom(selectedFocalLength);
                 } catch (IllegalArgumentException e) {
-                    // Fallback if RGBA8888 is not supported (rare, but possible on legacy devices)
-                    Toast.makeText(this, "Camera bind failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    Log.e("Camera", "Bind failed", e);
+                    Toast.makeText(getApplicationContext(), "Camera config failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
 
             } catch (ExecutionException | InterruptedException e) {
-                Log.e("Camera", "Binding failed", e);
+                Log.e("Camera", "Provider init failed", e);
             } catch (Exception e) {
                 Log.e("Camera", "Unexpected error", e);
             }
         }, ContextCompat.getMainExecutor(this));
     }
 
-    // High-performance loop with Zero-Allocation strategy
     private void analyzeImage(@NonNull ImageProxy image) {
         try {
             if (isFrozen) {
@@ -271,7 +279,7 @@ public class MainActivity extends AppCompatActivity {
             int width = image.getWidth();
             int height = image.getHeight();
             
-            // Safety check for invalid dimensions
+            // Safety check for invalid dimensions or 0-size buffers
             if (width <= 0 || height <= 0) {
                 image.close();
                 return;
@@ -279,7 +287,7 @@ public class MainActivity extends AppCompatActivity {
 
             int rotationDegrees = image.getImageInfo().getRotationDegrees();
             
-            // Double buffering strategy to avoid UI race conditions
+            // Double buffering
             Bitmap targetBitmap = useBufferA ? renderBitmapA : renderBitmapB;
             
             // Re-allocate bitmaps if size changes or null
@@ -302,9 +310,8 @@ public class MainActivity extends AppCompatActivity {
             ByteBuffer buffer = planes[0].getBuffer();
             buffer.rewind();
             
-            // Verify buffer size
-            if (buffer.remaining() < width * height * 4) {
-                 // Buffer too small for RGBA
+            // Loose check: just ensure we have enough data to fill the bitmap
+            if (buffer.remaining() < targetBitmap.getByteCount()) {
                  image.close();
                  return;
             }
@@ -312,21 +319,22 @@ public class MainActivity extends AppCompatActivity {
             targetBitmap.copyPixelsFromBuffer(buffer);
             image.close();
 
-            // Apply Native Java Filters with REUSABLE buffer
+            // Apply Filters
             ImageUtils.applyPreviewEffects(targetBitmap, cachedPixelBuffer, currentFilter, currentSaturation, 
-                curveView.getLutRGB(), curveView.getLutR(), curveView.getLutG(), curveView.getLutB());
+                curveView != null ? curveView.getLutRGB() : null, 
+                curveView != null ? curveView.getLutR() : null, 
+                curveView != null ? curveView.getLutG() : null, 
+                curveView != null ? curveView.getLutB() : null);
 
             final Bitmap finalBitmap = targetBitmap;
             runOnUiThread(() -> {
                 if (!isDestroyed() && !isFinishing() && !isFrozen && finalBitmap != null) {
                     ivPreviewOverlay.setImageBitmap(finalBitmap);
                     
-                    // Handle Rotation via View Transform
                     if (ivPreviewOverlay.getRotation() != rotationDegrees) {
                          ivPreviewOverlay.setRotation(rotationDegrees);
                     }
                     
-                    // Only set ScaleType if it changes (optimization)
                     ImageView.ScaleType targetScale = (aspectRatioMode == 2) 
                         ? ImageView.ScaleType.CENTER_INSIDE 
                         : ImageView.ScaleType.CENTER_CROP;
@@ -336,7 +344,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
             
-            // Toggle buffer for next frame
             useBufferA = !useBufferA;
             
         } catch (Exception e) {
@@ -349,7 +356,6 @@ public class MainActivity extends AppCompatActivity {
         if (imageCapture == null) return;
         performHaptic();
         
-        // Shutter Animation
         if (vShutterFlash != null) {
             vShutterFlash.setVisibility(View.VISIBLE);
             vShutterFlash.setAlpha(1f);
@@ -361,7 +367,6 @@ public class MainActivity extends AppCompatActivity {
             }).start();
         }
         
-        // Capture Config
         int[] lutRGB = curveView != null ? curveView.getLutRGB() : null;
         int[] lutR = curveView != null ? curveView.getLutR() : null;
         int[] lutG = curveView != null ? curveView.getLutG() : null;
@@ -369,33 +374,26 @@ public class MainActivity extends AppCompatActivity {
         boolean crop = (aspectRatioMode == 2);
         float sat = currentSaturation;
         ImageUtils.FilterType filter = currentFilter;
-        // Clone config to avoid race conditions if user changes settings while saving
         ImageUtils.WatermarkConfig wm = wmConfig.clone(); 
 
         imageCapture.takePicture(ContextCompat.getMainExecutor(this), new ImageCapture.OnImageCapturedCallback() {
             @Override
             public void onCaptureSuccess(@NonNull ImageProxy image) {
-                // Offload processing
                 cameraExecutor.execute(() -> {
                     try {
-                        // 1. Convert
                         Bitmap bitmap = ImageUtils.imageProxyToBitmap(image);
-                        image.close(); // Close ASAP
+                        image.close();
                         
                         if (bitmap != null) {
-                            // 2. Process (Filter + Curve + Watermark)
                             Bitmap processed = ImageUtils.processImage(bitmap, filter, sat,
                                     lutRGB, lutR, lutG, lutB, wm, crop);
-                                    
-                            // 3. Save
                             Uri savedUri = saveImage(processed);
                             
-                            // 4. Update UI
                             if (savedUri != null) {
                                 runOnUiThread(() -> {
                                     if (!isDestroyed()) {
                                         ivLastImage.setImageBitmap(processed);
-                                        Toast.makeText(MainActivity.this, "Saved to Gallery", Toast.LENGTH_SHORT).show();
+                                        Toast.makeText(getApplicationContext(), "Saved", Toast.LENGTH_SHORT).show();
                                     }
                                 });
                             }
@@ -407,12 +405,10 @@ public class MainActivity extends AppCompatActivity {
             }
             @Override
             public void onError(@NonNull ImageCaptureException exception) {
-                Toast.makeText(MainActivity.this, "Capture Failed: " + exception.getMessage(), Toast.LENGTH_SHORT).show();
+                Toast.makeText(getApplicationContext(), "Capture Failed", Toast.LENGTH_SHORT).show();
             }
         });
     }
-
-    // ... (Standard boilerplates for Permissions, Location, Setup below) ...
 
     private void triggerPreviewUpdate() {
         if (isFrozen && frozenBitmap != null) {
@@ -427,25 +423,29 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupImportExport() {
-        exportLauncher = registerForActivityResult(
-            new ActivityResultContracts.StartActivityForResult(),
-            result -> {
-                if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
-                    Uri uri = result.getData().getData();
-                    if (uri != null) saveXmpToFile(uri);
+        try {
+            exportLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                result -> {
+                    if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+                        Uri uri = result.getData().getData();
+                        if (uri != null) saveXmpToFile(uri);
+                    }
                 }
-            }
-        );
+            );
 
-        importLauncher = registerForActivityResult(
-            new ActivityResultContracts.StartActivityForResult(),
-            result -> {
-                if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
-                    Uri uri = result.getData().getData();
-                    if (uri != null) importXmpFromFile(uri);
+            importLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                result -> {
+                    if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+                        Uri uri = result.getData().getData();
+                        if (uri != null) importXmpFromFile(uri);
+                    }
                 }
-            }
-        );
+            );
+        } catch (Exception e) {
+            // Some devices might crash on registry binding in certain lifecycle states
+        }
     }
     
     private void saveXmpToFile(Uri uri) {
@@ -456,11 +456,10 @@ public class MainActivity extends AppCompatActivity {
             if (os != null) {
                 os.write(xmp.getBytes());
                 os.close();
-                Toast.makeText(this, "Exported: " + currentPreset.name, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Exported", Toast.LENGTH_SHORT).show();
             }
         } catch (Exception e) {
-            e.printStackTrace();
-            Toast.makeText(this, "Export Failed", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Failed", Toast.LENGTH_SHORT).show();
         }
     }
     
@@ -478,72 +477,77 @@ public class MainActivity extends AppCompatActivity {
             loadedPresets.add(newPreset);
             refreshPresetListUI();
             applyPreset(newPreset);
-            Toast.makeText(this, "Imported: " + newPreset.name, Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Imported", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            e.printStackTrace();
-            Toast.makeText(this, "Invalid XMP File", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Invalid XMP", Toast.LENGTH_SHORT).show();
         }
     }
 
     private void setupControls() {
-        findViewById(R.id.btnCapture).setOnClickListener(v -> takePhoto());
-        
-        findViewById(R.id.btnGallery).setOnClickListener(v -> {
-            performHaptic();
-            startActivity(new Intent(this, GalleryActivity.class));
-        });
-        
-        btnRatio.setOnClickListener(v -> {
-            performHaptic();
-            aspectRatioMode = (aspectRatioMode + 1) % 3;
-            updateAspectRatioUI();
-            startCamera(); 
-        });
-        
-        findViewById(R.id.btnEditPreset).setOnClickListener(v -> { performHaptic(); enterEditorMode(); });
-        findViewById(R.id.btnCloseEditor).setOnClickListener(v -> { performHaptic(); exitEditorMode(); });
+        try {
+            findViewById(R.id.btnCapture).setOnClickListener(v -> takePhoto());
+            
+            findViewById(R.id.btnGallery).setOnClickListener(v -> {
+                performHaptic();
+                startActivity(new Intent(this, GalleryActivity.class));
+            });
+            
+            btnRatio.setOnClickListener(v -> {
+                performHaptic();
+                aspectRatioMode = (aspectRatioMode + 1) % 3;
+                updateAspectRatioUI();
+                startCamera(); 
+            });
+            
+            findViewById(R.id.btnEditPreset).setOnClickListener(v -> { performHaptic(); enterEditorMode(); });
+            findViewById(R.id.btnCloseEditor).setOnClickListener(v -> { performHaptic(); exitEditorMode(); });
 
-        sbSaturation.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                currentSaturation = progress - 100;
+            sbSaturation.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    currentSaturation = progress - 100;
+                    triggerPreviewUpdate();
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+            
+            findViewById(R.id.btnResetCurve).setOnClickListener(v -> {
+                performHaptic();
+                currentSaturation = 0;
+                sbSaturation.setProgress(100);
+                curveView.resetCurves();
                 triggerPreviewUpdate();
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-        
-        findViewById(R.id.btnResetCurve).setOnClickListener(v -> {
-            performHaptic();
-            currentSaturation = 0;
-            sbSaturation.setProgress(100);
-            curveView.resetCurves();
-            triggerPreviewUpdate();
-        });
-        
-        findViewById(R.id.btnSavePreset).setOnClickListener(v -> showSavePresetDialog());
-        
-        findViewById(R.id.btnCurveRGB).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.RGB));
-        findViewById(R.id.btnCurveR).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.RED));
-        findViewById(R.id.btnCurveG).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.GREEN));
-        findViewById(R.id.btnCurveB).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.BLUE));
-        
-        findViewById(R.id.btnWatermark).setOnClickListener(v -> { performHaptic(); showWatermarkSettingsDialog(); });
-        
-        findViewById(R.id.btnExportXmp).setOnClickListener(v -> {
-            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("application/xml");
-            intent.putExtra(Intent.EXTRA_TITLE, currentPreset.name + ".xmp");
-            exportLauncher.launch(intent);
-        });
-        
-        findViewById(R.id.btnImportXmp).setOnClickListener(v -> {
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("*/*"); 
-            importLauncher.launch(intent);
-        });
+            });
+            
+            findViewById(R.id.btnSavePreset).setOnClickListener(v -> showSavePresetDialog());
+            
+            findViewById(R.id.btnCurveRGB).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.RGB));
+            findViewById(R.id.btnCurveR).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.RED));
+            findViewById(R.id.btnCurveG).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.GREEN));
+            findViewById(R.id.btnCurveB).setOnClickListener(v -> curveView.setChannel(CurveView.Channel.BLUE));
+            
+            findViewById(R.id.btnWatermark).setOnClickListener(v -> { performHaptic(); showWatermarkSettingsDialog(); });
+            
+            findViewById(R.id.btnExportXmp).setOnClickListener(v -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("application/xml");
+                    intent.putExtra(Intent.EXTRA_TITLE, currentPreset.name + ".xmp");
+                    exportLauncher.launch(intent);
+                } catch(Exception e) { Toast.makeText(this, "Feature unavailable", Toast.LENGTH_SHORT).show(); }
+            });
+            
+            findViewById(R.id.btnImportXmp).setOnClickListener(v -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*"); 
+                    importLauncher.launch(intent);
+                } catch(Exception e) { Toast.makeText(this, "Feature unavailable", Toast.LENGTH_SHORT).show(); }
+            });
+        } catch (Exception e) {}
     }
     
     private void showSavePresetDialog() {
@@ -562,7 +566,7 @@ public class MainActivity extends AppCompatActivity {
                     newPreset.name = name;
                     loadedPresets.add(newPreset);
                     refreshPresetListUI();
-                    Toast.makeText(this, "Saved " + name, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
                 }
             })
             .setNegativeButton("Cancel", null)
@@ -603,12 +607,14 @@ public class MainActivity extends AppCompatActivity {
     private void applyPreset(ImageUtils.CurvePreset preset) {
         performHaptic();
         currentPreset = preset;
-        curveView.setPoints(CurveView.Channel.RGB, preset.rgb);
-        curveView.setPoints(CurveView.Channel.RED, preset.r);
-        curveView.setPoints(CurveView.Channel.GREEN, preset.g);
-        curveView.setPoints(CurveView.Channel.BLUE, preset.b);
+        if (curveView != null) {
+            curveView.setPoints(CurveView.Channel.RGB, preset.rgb);
+            curveView.setPoints(CurveView.Channel.RED, preset.r);
+            curveView.setPoints(CurveView.Channel.GREEN, preset.g);
+            curveView.setPoints(CurveView.Channel.BLUE, preset.b);
+        }
         currentSaturation = preset.saturation;
-        sbSaturation.setProgress((int)(currentSaturation + 100));
+        if (sbSaturation != null) sbSaturation.setProgress((int)(currentSaturation + 100));
         triggerPreviewUpdate();
     }
     
@@ -616,10 +622,9 @@ public class MainActivity extends AppCompatActivity {
         Bitmap currentDisplay = useBufferA ? renderBitmapB : renderBitmapA;
         if (currentDisplay != null) {
             isFrozen = true;
-            // Need a clean copy to apply filters onto repeatedly
             frozenBitmap = currentDisplay.copy(Bitmap.Config.ARGB_8888, true);
-            presetEditorContainer.setVisibility(View.VISIBLE);
-            controlsContainer.setVisibility(View.GONE);
+            if (presetEditorContainer != null) presetEditorContainer.setVisibility(View.VISIBLE);
+            if (controlsContainer != null) controlsContainer.setVisibility(View.GONE);
             updateFreezeFrame();
         } else {
             Toast.makeText(this, "Wait for stream...", Toast.LENGTH_SHORT).show();
@@ -627,8 +632,8 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void exitEditorMode() {
-        presetEditorContainer.setVisibility(View.GONE);
-        controlsContainer.setVisibility(View.VISIBLE);
+        if (presetEditorContainer != null) presetEditorContainer.setVisibility(View.GONE);
+        if (controlsContainer != null) controlsContainer.setVisibility(View.VISIBLE);
         frozenBitmap = null;
         isFrozen = false; 
     }
@@ -636,12 +641,12 @@ public class MainActivity extends AppCompatActivity {
     private void updateFreezeFrame() {
         if (frozenBitmap == null) return;
         cameraExecutor.execute(() -> {
-             // Reset from raw frozen state or keep applying? 
-             // Logic: Filter loop applies to "source", writes to "dest".
-             // Here we use frozenBitmap as source, copy it to a temp, apply, display.
              Bitmap temp = frozenBitmap.copy(Bitmap.Config.ARGB_8888, true);
              ImageUtils.applyPreviewEffects(temp, null, currentFilter, currentSaturation, 
-                curveView.getLutRGB(), curveView.getLutR(), curveView.getLutG(), curveView.getLutB());
+                curveView != null ? curveView.getLutRGB() : null, 
+                curveView != null ? curveView.getLutR() : null, 
+                curveView != null ? curveView.getLutG() : null, 
+                curveView != null ? curveView.getLutB() : null);
              runOnUiThread(() -> {
                  if (!isDestroyed()) ivPreviewOverlay.setImageBitmap(temp);
              });
@@ -649,22 +654,24 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void updateAspectRatioUI() {
+        if (btnRatio == null) return;
         if (aspectRatioMode == 0) { 
             btnRatio.setText("4:3");
-            maskTop.setVisibility(View.GONE);
-            maskBottom.setVisibility(View.GONE);
+            if (maskTop != null) maskTop.setVisibility(View.GONE);
+            if (maskBottom != null) maskBottom.setVisibility(View.GONE);
         } else if (aspectRatioMode == 1) { 
             btnRatio.setText("16:9");
-            maskTop.setVisibility(View.GONE);
-            maskBottom.setVisibility(View.GONE);
+            if (maskTop != null) maskTop.setVisibility(View.GONE);
+            if (maskBottom != null) maskBottom.setVisibility(View.GONE);
         } else { 
             btnRatio.setText("1:1");
-            maskTop.setVisibility(View.VISIBLE);
-            maskBottom.setVisibility(View.VISIBLE);
+            if (maskTop != null) maskTop.setVisibility(View.VISIBLE);
+            if (maskBottom != null) maskBottom.setVisibility(View.VISIBLE);
         }
     }
 
     private void setupFilterButtons() {
+        if (filterContainer == null) return;
         filterContainer.removeAllViews();
         for (ImageUtils.FilterType type : ImageUtils.FilterType.values()) {
             Button btn = new Button(this, null, android.R.attr.borderlessButtonStyle);
@@ -760,6 +767,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupFocalLengthButtons() {
+        if (focalLengthContainer == null) return;
         focalLengthContainer.removeAllViews();
         for (int focalLength : FOCAL_LENGTHS) {
             Button btn = new Button(this, null, android.R.attr.borderlessButtonStyle);
@@ -778,6 +786,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateFocalLengthUI() {
+        if (focalLengthContainer == null) return;
         for (int i = 0; i < focalLengthContainer.getChildCount(); i++) {
             Button btn = (Button) focalLengthContainer.getChildAt(i);
             int fl = FOCAL_LENGTHS[i];
