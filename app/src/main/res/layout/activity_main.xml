@@ -7,7 +7,7 @@
     android:background="@android:color/black"
     tools:context=".MainActivity">
 
-    <!-- Camera Preview: Default to 3:4 for Portrait -->
+    <!-- Camera Preview -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
@@ -64,11 +64,11 @@
         android:layout_marginBottom="16dp"
         android:layout_marginEnd="16dp">
 
-        <TextView android:id="@+id/focal16mm" android:text="16" style="@style/FocalText"/>
-        <TextView android:id="@+id/focal24mm" android:text="24" style="@style/FocalText"/>
-        <TextView android:id="@+id/focal35mm" android:text="35" style="@style/FocalText"/>
-        <TextView android:id="@+id/focal50mm" android:text="50" style="@style/FocalText"/>
-        <TextView android:id="@+id/focal85mm" android:text="85" style="@style/FocalText"/>
+        <TextView android:id="@+id/focal16mm" android:text="16" style="@style/FocalText" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/focal24mm" android:text="24" style="@style/FocalText" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/focal35mm" android:text="35" style="@style/FocalText" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/focal50mm" android:text="50" style="@style/FocalText" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/focal85mm" android:text="85" style="@style/FocalText" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
     </LinearLayout>
 
     <!-- Bottom Controls -->
@@ -190,10 +190,10 @@
                 android:layout_marginBottom="8dp"
                 android:gravity="center">
                 
-                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
-                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:textColor="#FF4444"/>
-                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:textColor="#44FF44"/>
-                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:textColor="#4444FF"/>
+                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FF4444"/>
+                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#44FF44"/>
+                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#4444FF"/>
             </LinearLayout>
 
             <com.camulator.pro.ui.CurveView
