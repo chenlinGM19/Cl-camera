@@ -7,12 +7,12 @@
     android:background="@android:color/black"
     tools:context=".MainActivity">
 
-    <!-- Camera Preview -->
+    <!-- Camera Preview: Default to 3:4 for Portrait -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        app:layout_constraintDimensionRatio="4:3"
+        app:layout_constraintDimensionRatio="3:4"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent" />
 
@@ -44,7 +44,7 @@
         <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
         
         <TextView
-            android:text="RAW+J"
+            android:text="PRO RAW"
             android:textColor="#FF9800"
             android:textStyle="bold"
             android:layout_width="wrap_content"
@@ -65,7 +65,7 @@
         android:layout_marginEnd="16dp">
 
         <TextView android:id="@+id/focal16mm" android:text="16" style="@style/FocalText"/>
-        <TextView android:id="@+id/focal24mm" android:text="24" style="@style/FocalText" android:textColor="#FF9800"/>
+        <TextView android:id="@+id/focal24mm" android:text="24" style="@style/FocalText"/>
         <TextView android:id="@+id/focal35mm" android:text="35" style="@style/FocalText"/>
         <TextView android:id="@+id/focal50mm" android:text="50" style="@style/FocalText"/>
         <TextView android:id="@+id/focal85mm" android:text="85" style="@style/FocalText"/>
@@ -76,7 +76,7 @@
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
         android:layout_height="120dp"
-        android:background="#80000000"
+        android:background="#99000000"
         app:layout_constraintBottom_toBottomOf="parent">
 
         <!-- Thumbnail / Gallery -->
@@ -125,31 +125,164 @@
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
-    <!-- Editor Overlay (Curves, etc.) -->
+    <!-- Processing Indicator -->
+    <ProgressBar
+        android:id="@+id/processingProgress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:indeterminateTint="#FF9800"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        android:elevation="10dp"/>
+
+    <!-- Editor Overlay -->
     <LinearLayout
         android:id="@+id/layoutEditor"
         android:layout_width="match_parent"
-        android:layout_height="300dp"
+        android:layout_height="350dp"
         android:orientation="vertical"
         android:background="#EE000000"
-        android:padding="16dp"
+        android:clickable="true"
+        android:focusable="true"
         android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@id/bottomBar">
 
-        <TextView
-            android:text="RGB Curves"
-            android:textColor="#FFF"
-            android:layout_marginBottom="8dp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
-
-        <com.camulator.pro.ui.CurveView
-            android:id="@+id/curveView"
+        <!-- Tab Headers -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:background="#222"/>
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="8dp">
+            <TextView
+                android:id="@+id/tabCurves"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Curves"
+                android:textAlignment="center"
+                android:textStyle="bold"
+                android:textColor="#FF9800"/>
+            <TextView
+                android:id="@+id/tabWatermark"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Watermark"
+                android:textAlignment="center"
+                android:textColor="#FFFFFF"/>
+        </LinearLayout>
 
+        <!-- Curves Container -->
+        <LinearLayout
+            android:id="@+id/containerCurves"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="12dp">
+            
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp"
+                android:gravity="center">
+                
+                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:textColor="#FF4444"/>
+                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:textColor="#44FF44"/>
+                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:textColor="#4444FF"/>
+            </LinearLayout>
+
+            <com.camulator.pro.ui.CurveView
+                android:id="@+id/curveView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="#222"/>
+        </LinearLayout>
+
+        <!-- Watermark Container -->
+        <ScrollView
+            android:id="@+id/containerWatermark"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+            
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView android:text="Style" android:textColor="#CCC" android:textSize="12sp"/>
+                <RadioGroup
+                    android:id="@+id/rgStyle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <RadioButton android:id="@+id/rbFooter" android:text="Footer Frame" android:textColor="#FFF" android:checked="true"/>
+                    <RadioButton android:id="@+id/rbOverlay" android:text="Overlay" android:textColor="#FFF" android:layout_marginStart="16dp"/>
+                </RadioGroup>
+                
+                <LinearLayout
+                   android:layout_width="match_parent"
+                   android:layout_height="wrap_content"
+                   android:orientation="horizontal">
+                   <TextView android:text="Background:" android:textColor="#CCC" android:layout_marginEnd="8dp"/>
+                   <ToggleButton
+                       android:id="@+id/toggleBgColor"
+                       android:layout_width="60dp"
+                       android:layout_height="30dp"
+                       android:textOn="White"
+                       android:textOff="Black"
+                       android:checked="true"/>
+                   <TextView android:text="Align:" android:textColor="#CCC" android:layout_marginStart="16dp" android:layout_marginEnd="8dp"/>
+                   <ImageView android:id="@+id/alignLeft" android:src="@android:drawable/ic_media_previous" android:layout_width="24dp" android:layout_height="24dp" app:tint="#FFF"/>
+                   <ImageView android:id="@+id/alignCenter" android:src="@android:drawable/ic_media_pause" android:layout_width="24dp" android:layout_height="24dp" app:tint="#888"/>
+                   <ImageView android:id="@+id/alignRight" android:src="@android:drawable/ic_media_next" android:layout_width="24dp" android:layout_height="24dp" app:tint="#888"/>
+                </LinearLayout>
+
+                <TextView android:text="Custom Text (Logo)" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <EditText
+                    android:id="@+id/etWatermarkText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Camulator Pro"
+                    android:textColor="#FFF"
+                    android:backgroundTint="#FF9800"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="4dp">
+                    <CheckBox android:id="@+id/cbDate" android:text="Date/Time" android:textColor="#FFF" android:checked="true" android:layout_weight="1"/>
+                    <CheckBox android:id="@+id/cbGPS" android:text="GPS Coords" android:textColor="#FFF" android:checked="true" android:layout_weight="1"/>
+                </LinearLayout>
+
+                <TextView android:text="Location Detail" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="4dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+                    <CheckBox android:id="@+id/cbCity" android:text="City/District" android:textColor="#FFF" android:checked="true" android:layout_weight="1"/>
+                    <CheckBox android:id="@+id/cbStreet" android:text="Street" android:textColor="#FFF" android:checked="false" android:layout_weight="1"/>
+                </LinearLayout>
+
+                <TextView android:text="Frame Height (%)" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <SeekBar
+                    android:id="@+id/seekHeight"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="10"
+                    android:progress="6"/>
+
+            </LinearLayout>
+        </ScrollView>
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
