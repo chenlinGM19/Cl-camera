@@ -9,62 +9,222 @@
     <!-- Camera Preview -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <!-- Tone Curve Overlay -->
-    <com.camulator.pro.CurveView
-        android:id="@+id/curveView"
-        android:layout_width="200dp"
-        android:layout_height="200dp"
-        android:layout_marginTop="32dp"
-        android:layout_marginEnd="16dp"
-        android:background="#80000000"
-        android:visibility="gone"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <!-- Focal Length Selector -->
-    <HorizontalScrollView
-        android:id="@+id/focalLengthScroll"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
-        android:scrollbars="none"
-        android:background="#40000000"
-        android:paddingVertical="8dp"
-        app:layout_constraintBottom_toTopOf="@id/controlsContainer">
+        android:layout_height="match_parent" />
+        
+    <!-- Freeze Frame Preview for Editing -->
+    <ImageView
+        android:id="@+id/ivEditPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:scaleType="centerCrop"
+        android:background="#000000"/>
 
-        <LinearLayout
-            android:id="@+id/focalLengthContainer"
+    <!-- Mask for 1:1 Aspect Ratio -->
+    <View
+        android:id="@+id/maskTop"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:background="#FF000000"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/centerGuideline"
+        app:layout_constraintHeight_percent="0.15" />
+        
+    <View
+        android:id="@+id/centerGuideline"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:visibility="invisible"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"/>
+
+    <View
+        android:id="@+id/maskBottom"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:background="#FF000000"
+        android:visibility="gone"
+        app:layout_constraintTop_toBottomOf="@id/centerGuideline"
+        app:layout_constraintBottom_toBottomOf="parent" 
+        app:layout_constraintHeight_percent="0.15"/>
+
+    <!-- Preset Editor Container -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/presetEditorContainer"
+        android:layout_width="match_parent"
+        android:layout_height="380dp"
+        android:background="#E6000000"
+        android:visibility="gone"
+        android:padding="12dp"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="20dp"
+        app:layout_constraintBottom_toBottomOf="parent">
+        
+        <TextView
+            android:id="@+id/tvEditorTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingHorizontal="16dp"
-            android:gravity="center_vertical">
-            <!-- Buttons added programmatically -->
-        </LinearLayout>
-    </HorizontalScrollView>
+            android:text="Preset Editor"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"/>
+            
+        <Button
+            android:id="@+id/btnCloseEditor"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:text="✕"
+            android:textSize="16sp"
+            android:backgroundTint="#00000000"
+            android:textColor="#FFFFFF"
+            android:padding="0dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"/>
 
-    <!-- Controls Container -->
+        <LinearLayout
+            android:id="@+id/curveChannels"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginTop="8dp"
+            app:layout_constraintTop_toBottomOf="@id/tvEditorTitle">
+            
+            <Button android:id="@+id/btnCurveRGB" android:layout_width="50dp" android:layout_height="35dp" android:text="RGB" android:textSize="10sp" android:backgroundTint="#FFFFFF" android:textColor="#000" android:layout_marginEnd="4dp" android:padding="0dp"/>
+            <Button android:id="@+id/btnCurveR" android:layout_width="50dp" android:layout_height="35dp" android:text="Red" android:textSize="10sp" android:backgroundTint="#FF4444" android:textColor="#FFF" android:layout_marginEnd="4dp" android:padding="0dp"/>
+            <Button android:id="@+id/btnCurveG" android:layout_width="50dp" android:layout_height="35dp" android:text="Grn" android:textSize="10sp" android:backgroundTint="#44FF44" android:textColor="#000" android:layout_marginEnd="4dp" android:padding="0dp"/>
+            <Button android:id="@+id/btnCurveB" android:layout_width="50dp" android:layout_height="35dp" android:text="Blu" android:textSize="10sp" android:backgroundTint="#4444FF" android:textColor="#FFF" android:padding="0dp"/>
+        </LinearLayout>
+
+        <com.camulator.pro.CurveView
+            android:id="@+id/curveView"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
+            android:background="#44222222"
+            app:layout_constraintTop_toBottomOf="@id/curveChannels"
+            app:layout_constraintBottom_toTopOf="@id/curveActions"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <LinearLayout
+            android:id="@+id/curveActions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            app:layout_constraintBottom_toBottomOf="parent">
+
+            <Button
+                android:id="@+id/btnImportXmp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Import .XMP"
+                android:textSize="11sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="8dp"/>
+
+            <Button
+                android:id="@+id/btnExportXmp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Export .XMP"
+                android:textSize="11sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="8dp"/>
+                
+            <Button
+                android:id="@+id/btnResetCurve"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Reset"
+                android:textSize="11sp"
+                android:backgroundTint="#AA0000"/>
+        </LinearLayout>
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- Controls Container (Hidden when Editor is open) -->
     <LinearLayout
         android:id="@+id/controlsContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#99000000"
         android:orientation="vertical"
-        android:padding="16dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="16dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         app:layout_constraintBottom_toBottomOf="parent">
+
+        <!-- Focal Lengths -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none"
+            android:layout_marginBottom="4dp">
+            <LinearLayout
+                android:id="@+id/focalLengthContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"/>
+        </HorizontalScrollView>
+
+        <!-- Filter Intensity -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+            
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Strength"
+                android:textColor="#AAAAAA"
+                android:textSize="10sp"
+                android:layout_marginEnd="8dp"/>
+                
+            <SeekBar
+                android:id="@+id/sbFilterIntensity"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progress="100"
+                android:progressTint="#FFD700"
+                android:thumbTint="#FFFFFF"/>
+        </LinearLayout>
+
+        <!-- Filter Selector -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none"
+            android:layout_marginBottom="8dp">
+            <LinearLayout
+                android:id="@+id/filterContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"/>
+        </HorizontalScrollView>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center">
+            android:gravity="center"
+            android:layout_marginBottom="16dp">
 
             <Button
                 android:id="@+id/btnRatio"
@@ -74,51 +234,33 @@
                 android:textSize="12sp"
                 style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:textColor="#FFFFFF"/>
-            
-            <Button
-                android:id="@+id/btnFilter"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Filter: Normal"
-                android:textSize="12sp"
-                style="@style/Widget.MaterialComponents.Button.TextButton"
-                android:textColor="#FFFFFF"/>
 
             <Button
-                android:id="@+id/btnCurve"
+                android:id="@+id/btnEditPreset"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Curve"
+                android:text="Edit Preset"
                 android:textSize="12sp"
                 style="@style/Widget.MaterialComponents.Button.TextButton"
-                android:textColor="#FFFFFF"/>
-        </LinearLayout>
-        
-        <LinearLayout
-             android:layout_width="match_parent"
-             android:layout_height="wrap_content"
-             android:orientation="horizontal"
-             android:gravity="center"
-             android:paddingTop="8dp">
-
-             <Button
+                android:textColor="#FFD700"/>
+                
+            <Button
                 android:id="@+id/btnWatermark"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Watermark Options"
-                android:textSize="10sp"
+                android:text="Watermark"
+                android:textSize="12sp"
                 style="@style/Widget.MaterialComponents.Button.TextButton"
-                android:textColor="#AAAAAA"/>
-
+                android:textColor="#FFFFFF"/>
         </LinearLayout>
 
         <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/btnCapture"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
             android:layout_gravity="center"
-            android:layout_marginTop="16dp"
             android:backgroundTint="#FFFFFF"
+            app:fabCustomSize="72dp"
             app:srcCompat="@android:drawable/ic_menu_camera"
             app:tint="#000000" />
             
