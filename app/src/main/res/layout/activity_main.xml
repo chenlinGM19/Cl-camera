@@ -7,7 +7,7 @@
     android:background="@android:color/black"
     tools:context=".MainActivity">
 
-    <!-- Camera Preview -->
+    <!-- Camera Preview (Hardware) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
@@ -15,6 +15,17 @@
         app:layout_constraintDimensionRatio="3:4"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent" />
+
+    <!-- Processed Preview Overlay (Software) -->
+    <ImageView
+        android:id="@+id/previewOverlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:scaleType="fitCenter"
+        app:layout_constraintTop_toTopOf="@id/viewFinder"
+        app:layout_constraintBottom_toBottomOf="@id/viewFinder"
+        app:layout_constraintStart_toStartOf="@id/viewFinder"
+        app:layout_constraintEnd_toEndOf="@id/viewFinder" />
 
     <!-- Shutter Blackout Overlay -->
     <View
@@ -79,7 +90,7 @@
         android:background="#99000000"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Horizontal EV Slider -->
+        <!-- Exposure Controls (Mode + Slider) -->
         <LinearLayout
             android:id="@+id/evContainer"
             android:layout_width="match_parent"
@@ -91,10 +102,26 @@
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toTopOf="@id/shutterContainer">
             
-            <TextView 
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnExposureMode"
                 android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:padding="0dp"
+                android:text="Auto"
+                android:textSize="11sp"
+                android:textColor="#000"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                app:backgroundTint="#FFF"
+                app:cornerRadius="18dp"
+                android:layout_marginEnd="8dp"/>
+
+            <TextView 
+                android:id="@+id/tvExposureMin"
+                android:layout_width="40dp"
                 android:layout_height="wrap_content"
                 android:text="-10" 
+                android:gravity="center"
                 android:textColor="#FFF" 
                 android:textSize="10sp"/>
                 
@@ -113,9 +140,11 @@
                 app:tickVisible="false"/>
                 
             <TextView 
-                android:layout_width="wrap_content"
+                android:id="@+id/tvExposureMax"
+                android:layout_width="40dp"
                 android:layout_height="wrap_content"
                 android:text="+10" 
+                android:gravity="center"
                 android:textColor="#FFF" 
                 android:textSize="10sp"/>
         </LinearLayout>
@@ -304,7 +333,12 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView android:text="Content Elements" android:textColor="#CCC" android:textSize="12sp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Content Elements" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp"/>
                 <com.google.android.material.switchmaterial.SwitchMaterial
                     android:id="@+id/swLogo"
                     android:layout_width="match_parent"
@@ -327,7 +361,13 @@
                     android:checked="true"
                     android:textColor="#FFF"/>
 
-                <TextView android:text="Location Details" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Location Details" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp" 
+                    android:layout_marginTop="8dp"/>
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -350,7 +390,13 @@
                         android:textColor="#FFF"/>
                 </LinearLayout>
 
-                <TextView android:text="Style &amp; Appearance" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Style &amp; Appearance" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp" 
+                    android:layout_marginTop="8dp"/>
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

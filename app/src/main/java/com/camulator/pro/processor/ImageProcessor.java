@@ -138,32 +138,52 @@ public class ImageProcessor {
         }
         return histogram;
     }
+    
+    // New method for ARGB pixels (from Bitmap)
+    public static int[] calculateLuminanceHistogram(int[] pixels) {
+        int[] histogram = new int[256];
+        if (pixels == null) return histogram;
+        // Sampling stride to increase performance on large images
+        int stride = Math.max(1, pixels.length / 50000); 
+        
+        for (int i = 0; i < pixels.length; i += stride) {
+            int p = pixels[i];
+            int r = (p >> 16) & 0xFF;
+            int g = (p >> 8) & 0xFF;
+            int b = p & 0xFF;
+            // Approx luminance
+            int luma = (r * 77 + g * 150 + b * 29) >> 8;
+            histogram[luma]++;
+        }
+        return histogram;
+    }
 
     // --- PROCESSING LOGIC ---
 
     public static Bitmap applyProcessing(Bitmap src, Map<CurveView.Channel, List<PointF>> curvePoints, EditParams params) {
         if (src == null) return null;
         Bitmap target = src.isMutable() ? src : src.copy(Bitmap.Config.ARGB_8888, true);
+        if (curvePoints == null && params == null) return target;
 
-        int[] masterLut = calculateLUTFromCurve(curvePoints.get(CurveView.Channel.RGB));
-        int[] rLut = calculateLUTFromCurve(curvePoints.get(CurveView.Channel.RED));
-        int[] gLut = calculateLUTFromCurve(curvePoints.get(CurveView.Channel.GREEN));
-        int[] bLut = calculateLUTFromCurve(curvePoints.get(CurveView.Channel.BLUE));
+        int[] masterLut = calculateLUTFromCurve(curvePoints != null ? curvePoints.get(CurveView.Channel.RGB) : null);
+        int[] rLut = calculateLUTFromCurve(curvePoints != null ? curvePoints.get(CurveView.Channel.RED) : null);
+        int[] gLut = calculateLUTFromCurve(curvePoints != null ? curvePoints.get(CurveView.Channel.GREEN) : null);
+        int[] bLut = calculateLUTFromCurve(curvePoints != null ? curvePoints.get(CurveView.Channel.BLUE) : null);
         
         // Prepare Light Adjustment LUT
-        int[] lightLut = calculateLightLut(params);
+        int[] lightLut = calculateLightLut(params != null ? params : new EditParams());
         
         // Prepare Color Grading Vectors
-        float[] shadowColor = hsvToRgb(params.shadowHue, params.shadowSat);
-        float[] midColor = hsvToRgb(params.midHue, params.midSat);
-        float[] highlightColor = hsvToRgb(params.highlightHue, params.highlightSat);
+        float[] shadowColor = hsvToRgb(params != null ? params.shadowHue : 0, params != null ? params.shadowSat : 0);
+        float[] midColor = hsvToRgb(params != null ? params.midHue : 0, params != null ? params.midSat : 0);
+        float[] highlightColor = hsvToRgb(params != null ? params.highlightHue : 0, params != null ? params.highlightSat : 0);
 
         int w = target.getWidth();
         int h = target.getHeight();
         int[] pixels = new int[w * h];
         target.getPixels(pixels, 0, w, 0, 0, w, h);
 
-        boolean hasColorGrade = params.shadowSat > 0 || params.midSat > 0 || params.highlightSat > 0;
+        boolean hasColorGrade = params != null && (params.shadowSat > 0 || params.midSat > 0 || params.highlightSat > 0);
 
         for (int i = 0; i < pixels.length; i++) {
             int p = pixels[i];
@@ -214,6 +234,13 @@ public class ImageProcessor {
     }
 
     private static int[] calculateLUTFromCurve(List<PointF> points) {
+        // Default Identity LUT if points are missing
+        if (points == null || points.size() < 2) {
+             int[] lut = new int[256];
+             for(int i=0; i<256; i++) lut[i] = i;
+             return lut;
+        }
+
         // High resolution LUT for calculation, mapped to 256
         float[] curve = calculateCurvePoints(points, 256);
         int[] lut = new int[256];

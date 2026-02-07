@@ -14,6 +14,8 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.PointF;
 import android.graphics.Typeface;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CaptureRequest;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
@@ -33,6 +35,9 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.camera2.interop.Camera2CameraControl;
+import androidx.camera.camera2.interop.Camera2CameraInfo;
+import androidx.camera.camera2.interop.CaptureRequestOptions;
 import androidx.camera.core.AspectRatio;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
@@ -64,6 +69,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -97,8 +103,10 @@ public class MainActivity extends AppCompatActivity {
     private float maxZoomRatio = 10f;
     private int currentAlign = 0;
     
-    // Edit Params
-    private ImageProcessor.EditParams editParams = new ImageProcessor.EditParams();
+    // Edit Params - Volatile for thread safety
+    private volatile ImageProcessor.EditParams editParams = new ImageProcessor.EditParams();
+    private volatile Map<CurveView.Channel, List<PointF>> previewCurves;
+    
     private int activeColorGradeMode = 0; // 0=Shadow, 1=Mid, 2=High
     
     private long lastHistogramUpdate = 0;
@@ -108,7 +116,12 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_NAME = "CamulatorPrefs";
     
     private final List<TextView> focalViews = new ArrayList<>();
-
+    
+    // Manual Exposure State
+    private boolean isManualExposure = false;
+    private Range<Long> exposureTimeRange;
+    private static final int MANUAL_ISO = 640; // Fixed ISO for Manual S-mode
+    
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -118,7 +131,12 @@ public class MainActivity extends AppCompatActivity {
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         
         hideSystemUI();
+        setupUI(); // Setup UI before loading settings to ensure views are ready
         loadSettings();
+        
+        // Init previewCurves with default state
+        previewCurves = binding.curveView.getControlPointsCopy();
+
         updatePreviewLayout();
 
         if (allPermissionsGranted()) {
@@ -128,7 +146,6 @@ public class MainActivity extends AppCompatActivity {
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor();
-        setupUI();
         setupEditorUI();
     }
 
@@ -240,14 +257,42 @@ public class MainActivity extends AppCompatActivity {
         binding.btnAspectRatio.setOnClickListener(v -> toggleAspectRatio());
         binding.btnEdit.setOnClickListener(v -> toggleEditPanel());
         
-        // EV Slider: -10 to +10 range
+        // Exposure Mode Toggle
+        binding.btnExposureMode.setOnClickListener(v -> toggleExposureMode());
+        
+        // Slider Control
         binding.evSlider.addOnChangeListener((slider, value, fromUser) -> {
-            if (camera != null) {
+            if (camera == null) return;
+            
+            if (isManualExposure) {
+                // Manual Shutter Speed Logic
+                if (exposureTimeRange != null) {
+                    double pct = value / 100.0;
+                    // Logarithmic mapping for natural time scale
+                    // Start from 1/10000s (100us) to max (usually 1s or 30s)
+                    long min = exposureTimeRange.getLower(); 
+                    long max = exposureTimeRange.getUpper();
+                    
+                    // Clamp min to usable fast shutter if hardware allows faster than needed
+                    if (min < 100000L) min = 100000L; // 1/10000s
+                    // Clamp max to 1 second for usability if device goes to 30s
+                    long practicalMax = 1000000000L; // 1s
+                    if (max > practicalMax) max = practicalMax;
+                    
+                    // Log formula: time = min * (max/min)^pct
+                    double timeNs = min * Math.pow((double)max / min, pct);
+                    long finalTime = (long) timeNs;
+                    
+                    updateManualExposure(finalTime);
+                    updateShutterLabel(finalTime);
+                }
+            } else {
+                // Auto EV Logic
                 CameraControl control = camera.getCameraControl();
-                // Map integer steps directly
-                int index = (int) value;
-                
-                // Ensure we respect hardware limits
+                // Map 0-100 slider to -10 to +10 range logic if we changed slider range?
+                // Actually EV slider range is usually small steps.
+                // Let's remap slider value based on mode switch.
+                int index = (int) value; // EV slider is -10 to +10
                 ExposureState state = camera.getCameraInfo().getExposureState();
                 Range<Integer> range = state.getExposureCompensationRange();
                 if (range.contains(index)) {
@@ -255,6 +300,97 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+    
+    private void toggleExposureMode() {
+        if (camera == null) return;
+        isManualExposure = !isManualExposure;
+        
+        if (isManualExposure) {
+            // Switch to Manual (Shutter Priority simulation)
+            binding.btnExposureMode.setText("S");
+            binding.btnExposureMode.setBackgroundColor(Color.parseColor("#FF9800"));
+            
+            // Reconfigure Slider for Shutter (0 to 100%)
+            binding.evSlider.setValueFrom(0f);
+            binding.evSlider.setValueTo(100f);
+            binding.evSlider.setValue(50f); // Default middle
+            binding.evSlider.setStepSize(1f);
+            
+            // Initial Manual Set
+            // We set a safe ISO (640) and middle shutter speed initially
+            updateManualExposure(-1); // -1 triggers calculation from current slider value
+            
+        } else {
+            // Switch to Auto
+            binding.btnExposureMode.setText("Auto");
+            binding.btnExposureMode.setBackgroundColor(Color.WHITE);
+            
+            // Reset Camera to Auto
+            Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+            c2.setCaptureRequestOptions(new CaptureRequestOptions.Builder()
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                .build());
+                
+            // Reconfigure Slider for EV (-10 to +10 approx)
+            ExposureState state = camera.getCameraInfo().getExposureState();
+            Range<Integer> range = state.getExposureCompensationRange();
+            
+            // Clamp visual range to -10/+10 or hardware max
+            float min = Math.max(-10, range.getLower());
+            float max = Math.min(10, range.getUpper());
+            
+            binding.evSlider.setValueFrom(min);
+            binding.evSlider.setValueTo(max);
+            binding.evSlider.setValue(0f);
+            binding.evSlider.setStepSize(1f);
+            
+            binding.tvExposureMin.setText("" + (int)min);
+            binding.tvExposureMax.setText("+" + (int)max);
+        }
+    }
+    
+    private void updateManualExposure(long specificTimeNs) {
+        if (camera == null) return;
+        
+        long timeNs = specificTimeNs;
+        if (timeNs == -1 && exposureTimeRange != null) {
+            // Recalculate from slider
+            float val = binding.evSlider.getValue();
+            long min = Math.max(exposureTimeRange.getLower(), 100000L); 
+            long max = Math.min(exposureTimeRange.getUpper(), 1000000000L);
+            timeNs = (long) (min * Math.pow((double)max / min, val / 100.0));
+            updateShutterLabel(timeNs);
+        }
+        
+        if (timeNs <= 0) return;
+
+        Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+        CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
+        
+        // Manual Mode requires AE_MODE_OFF or OFF_KEEP_STATE
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+        builder.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeNs);
+        // We must set Sensitivity (ISO) when AE is OFF.
+        // For "S" mode simulation, we fix ISO or use a "Safe" value.
+        builder.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, MANUAL_ISO); 
+        
+        c2.setCaptureRequestOptions(builder.build());
+    }
+    
+    private void updateShutterLabel(long ns) {
+        String label;
+        if (ns >= 1000000000L) {
+            double sec = ns / 1.0e9;
+            label = String.format(Locale.US, "%.1f\"", sec);
+        } else {
+            long fraction = 1000000000L / ns;
+            label = "1/" + fraction;
+        }
+        binding.tvExposureMin.setText(label);
+        // Clear Max label or use it for info?
+        // Let's keep Max as "+" just to show direction or clear it.
+        binding.tvExposureMax.setText(""); 
     }
     
     private void setupEditorUI() {
@@ -303,13 +439,12 @@ public class MainActivity extends AppCompatActivity {
         binding.channelG.setOnClickListener(channelListener);
         binding.channelB.setOnClickListener(channelListener);
         
-        // Curve change listener
+        // Curve change listener - UPDATE PREVIEW CURVES
         binding.curveView.setOnCurveChangeListener(() -> {
-            // Real-time update logic here if we had a filter pipeline
-            // For now, we update state for capture
+            previewCurves = binding.curveView.getControlPointsCopy();
         });
         
-        // Light Sliders
+        // Light Sliders - UPDATE PREVIEW PARAMS
         SeekBar.OnSeekBarChangeListener lightListener = new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -327,7 +462,7 @@ public class MainActivity extends AppCompatActivity {
         binding.seekWhites.setOnSeekBarChangeListener(lightListener);
         binding.seekBlacks.setOnSeekBarChangeListener(lightListener);
         
-        // Color Grade Modes
+        // Color Grade Modes - UPDATE PREVIEW PARAMS
         View.OnClickListener gradeListener = v -> {
             binding.btnGradeShadows.setTextColor(Color.WHITE);
             binding.btnGradeMids.setTextColor(Color.WHITE);
@@ -422,12 +557,18 @@ public class MainActivity extends AppCompatActivity {
     
     private void updatePreviewLayout() {
         ConstraintLayout.LayoutParams params = (ConstraintLayout.LayoutParams) binding.viewFinder.getLayoutParams();
+        // Sync overlay params
+        ConstraintLayout.LayoutParams overlayParams = (ConstraintLayout.LayoutParams) binding.previewOverlay.getLayoutParams();
+        
         switch (currentAspectRatioMode) {
             case AR_16_9: params.dimensionRatio = "H,9:16"; break;
             case AR_1_1: params.dimensionRatio = "H,1:1"; break;
             case AR_4_3: default: params.dimensionRatio = "H,3:4"; break;
         }
+        overlayParams.dimensionRatio = params.dimensionRatio;
+        
         binding.viewFinder.setLayoutParams(params);
+        binding.previewOverlay.setLayoutParams(overlayParams);
     }
     
     private void toggleEditPanel() {
@@ -462,20 +603,61 @@ public class MainActivity extends AppCompatActivity {
                 .setTargetAspectRatio(targetAspectRatio)
                 .build();
                 
+        // Real-time processing setup
         imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480))
+                .setTargetResolution(new Size(640, 480)) // Low res for performance
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888) // RGBA for Bitmap manipulation
                 .build();
                 
         imageAnalysis.setAnalyzer(cameraExecutor, image -> {
+            // 1. Convert to Bitmap
+            Bitmap bmp = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
+            bmp.copyPixelsFromBuffer(image.getPlanes()[0].getBuffer());
+
+            // 2. Rotate if needed
+            int rotation = image.getImageInfo().getRotationDegrees();
+            if (rotation != 0) {
+                Matrix m = new Matrix();
+                m.postRotate(rotation);
+                // Note: creating new bitmap is heavy, but at 640x480 it's manageable on modern devices
+                Bitmap rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
+                if (bmp != rotated) bmp.recycle();
+                bmp = rotated;
+            }
+
+            // 3. Apply Real-time Effects
+            // We reuse the same bitmap to avoid allocation
+            ImageProcessor.applyProcessing(bmp, previewCurves, editParams);
+            
+            // 4. Update UI
+            final Bitmap finalBmp = bmp;
             long currentTime = System.currentTimeMillis();
-            // Calculate histogram if editor is open
+            
+            // Histogram Update Check (Histogram now uses the processed bitmap)
+            int[] histogram = null;
             if (binding.layoutEditor.getVisibility() == View.VISIBLE && 
                (currentTime - lastHistogramUpdate > HISTOGRAM_UPDATE_INTERVAL_MS)) {
-                int[] histogram = ImageProcessor.calculateLuminanceHistogram(image.getPlanes()[0].getBuffer(), image.getPlanes()[0].getPixelStride());
+                
+                int[] pixels = new int[finalBmp.getWidth() * finalBmp.getHeight()];
+                finalBmp.getPixels(pixels, 0, finalBmp.getWidth(), 0, 0, finalBmp.getWidth(), finalBmp.getHeight());
+                histogram = ImageProcessor.calculateLuminanceHistogram(pixels);
                 lastHistogramUpdate = currentTime;
-                runOnUiThread(() -> binding.curveView.setHistogramData(histogram));
             }
+            final int[] finalHistogram = histogram;
+
+            runOnUiThread(() -> {
+                binding.previewOverlay.setImageBitmap(finalBmp);
+                // Ensure raw preview is hidden once we have processed frames
+                if (binding.viewFinder.getAlpha() > 0) {
+                    binding.viewFinder.animate().alpha(0f).setDuration(200).start();
+                }
+                
+                if (finalHistogram != null) {
+                    binding.curveView.setHistogramData(finalHistogram);
+                }
+            });
+
             image.close();
         });
 
@@ -484,6 +666,10 @@ public class MainActivity extends AppCompatActivity {
         try {
             cameraProvider.unbindAll();
             camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, imageAnalysis);
+            
+            // Get Camera Characteristics for Manual Exposure
+            Camera2CameraInfo c2Info = Camera2CameraInfo.from(camera.getCameraInfo());
+            exposureTimeRange = c2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
             
             // Setup Zoom
             camera.getCameraInfo().getZoomState().observe(this, state -> {
@@ -495,14 +681,6 @@ public class MainActivity extends AppCompatActivity {
                 updateFocalLengthVisibility(binding.focal50mm, 2.0f);
                 updateFocalLengthVisibility(binding.focal85mm, 3.5f);
             });
-            
-            // Setup EV Slider Range from Hardware
-            ExposureState exposureState = camera.getCameraInfo().getExposureState();
-            Range<Integer> range = exposureState.getExposureCompensationRange();
-            // User requested -10 to +10. We check overlap with hardware range.
-            // We set slider bounds to user request, but clamp usage.
-            // Ideally we should sync slider bounds to hardware if hardware range is small.
-            // But let's stick to user request visual range.
             
         } catch (Exception exc) {
             Toast.makeText(this, "Camera init failed", Toast.LENGTH_SHORT).show();
@@ -622,6 +800,13 @@ public class MainActivity extends AppCompatActivity {
                      config.exifInfo += "  " + new DecimalFormat("#").format(fl) + "mm";
                  } catch(Exception e){}
             }
+            
+            // If Manual Shutter, append info if available
+            if (isManualExposure) {
+                // Actually, the ImageCapture might not reflect manual setting immediately in EXIF
+                // But generally hardware handles this.
+            }
+            
         } catch (IOException e) { }
 
         // Apply Image Processing
