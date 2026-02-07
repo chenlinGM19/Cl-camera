@@ -186,7 +186,11 @@ public class MainActivity extends AppCompatActivity {
         binding.toggleBgColor.setChecked(prefs.getBoolean("white_bg", true));
         updateAlignUI(prefs.getInt("align", 0));
         binding.etWatermarkText.setText(prefs.getString("custom_text", "Camulator Pro"));
-        binding.seekHeight.setProgress(prefs.getInt("height_progress", 20)); 
+        
+        int heightProg = prefs.getInt("height_progress", 40); // Default 4%
+        binding.seekHeight.setProgress(heightProg); 
+        binding.tvWatermarkSizeLabel.setText(String.format(Locale.US, "Size: %.1f%%", heightProg / 10f));
+
         currentAspectRatioMode = prefs.getInt("aspect_ratio_mode", AR_4_3);
         
         // Load params
@@ -312,7 +316,6 @@ public class MainActivity extends AppCompatActivity {
             else if (v == binding.btnGradeHighs) activeColorGradeMode = 2;
             
             // Restore wheel state
-            // (Simplified: In a real app we would animate the wheel positions)
             binding.colorWheel.reset(); 
             binding.colorInfo.setText("Select Color");
         };
@@ -332,6 +335,18 @@ public class MainActivity extends AppCompatActivity {
         binding.alignLeft.setOnClickListener(v -> updateAlignUI(0));
         binding.alignCenter.setOnClickListener(v -> updateAlignUI(1));
         binding.alignRight.setOnClickListener(v -> updateAlignUI(2));
+        
+        // Height Slider with Real-time Feedback
+        binding.seekHeight.setMax(100); // 0.0% to 10.0%
+        binding.seekHeight.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float percent = progress / 10f;
+                binding.tvWatermarkSizeLabel.setText(String.format(Locale.US, "Size: %.1f%%", percent));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
     }
     
     private void updateAlignUI(int align) {
@@ -487,7 +502,7 @@ public class MainActivity extends AppCompatActivity {
         wmConfig.customText = binding.etWatermarkText.getText().toString();
         
         float progress = binding.seekHeight.getProgress(); 
-        wmConfig.heightPercent = 0.02f + (progress / 100f) * 0.23f; 
+        wmConfig.heightPercent = progress / 1000f; // 0 to 10%
         wmConfig.shouldCrop1to1 = (currentAspectRatioMode == AR_1_1);
 
         final Map<CurveView.Channel, List<PointF>> curveData = binding.curveView.getControlPointsCopy();

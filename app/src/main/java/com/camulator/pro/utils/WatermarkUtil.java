@@ -32,17 +32,16 @@ public class WatermarkUtil {
         int h = src.getHeight();
         
         // 1. Calculate Layout Dimensions
-        // Height calculation: Clamp between 8% and 25% of image dimension to maintain aesthetics
-        float minH = Math.max(w, h) * 0.08f;
-        float maxH = Math.max(w, h) * 0.25f;
+        // Use max dimension to keep scale consistent across orientations
+        int refDim = Math.max(w, h);
         
-        // If overlay, we treat height as a virtual zone at the bottom
-        int footerHeight = config.isFooterMode 
-                ? (int) (Math.max(w, h) * config.heightPercent) 
-                : (int) (Math.max(w, h) * 0.15f); // Fixed virtual height for overlay sizing
-
-        // Enforce minimum aesthetic height if in footer mode
-        if (config.isFooterMode && footerHeight < minH) footerHeight = (int) minH;
+        // Calculate Footer Height directly from percent (0% - 10%)
+        // No minimum floor logic anymore, allowing full control.
+        int footerHeight = (int) (refDim * config.heightPercent);
+        
+        // If height is 0, we can just return the original if it's footer mode (no extra pixels), 
+        // or just draw nothing if it's overlay.
+        // However, for code simplicity, we proceed. If footerHeight is 0, outputH = h.
         
         int outputH = config.isFooterMode ? h + footerHeight : h;
         
@@ -65,22 +64,24 @@ public class WatermarkUtil {
         // 4. Draw Footer / Overlay Gradient
         float startY = config.isFooterMode ? h : h - footerHeight;
         
-        if (config.isFooterMode) {
-            canvas.drawRect(0, h, w, outputH, bgPaint);
-        } else {
-            // High-quality gradient for overlay
-            Paint scrimPaint = new Paint();
-            scrimPaint.setShader(new LinearGradient(
-                    0, h - (footerHeight * 1.5f), 
-                    0, h, 
-                    0x00000000, 
-                    0xCC000000, 
-                    Shader.TileMode.CLAMP));
-            canvas.drawRect(0, h - (footerHeight * 1.5f), w, h, scrimPaint);
-            
-            mainTextColor = 0xFFFFFFFF;
-            subTextColor = 0xFFCCCCCC; 
-            dividerColor = 0xFF555555;
+        if (footerHeight > 0) {
+            if (config.isFooterMode) {
+                canvas.drawRect(0, h, w, outputH, bgPaint);
+            } else {
+                // High-quality gradient for overlay
+                Paint scrimPaint = new Paint();
+                scrimPaint.setShader(new LinearGradient(
+                        0, h - (footerHeight * 1.5f), 
+                        0, h, 
+                        0x00000000, 
+                        0xCC000000, 
+                        Shader.TileMode.CLAMP));
+                canvas.drawRect(0, h - (footerHeight * 1.5f), w, h, scrimPaint);
+                
+                mainTextColor = 0xFFFFFFFF;
+                subTextColor = 0xFFCCCCCC; 
+                dividerColor = 0xFF555555;
+            }
         }
         
         // 5. Prepare Text Content
@@ -99,10 +100,14 @@ public class WatermarkUtil {
         if (exifText.isEmpty()) exifText = "RAW";
 
         // 6. Dynamic Font Sizing (The key to "Aesthetics")
-        // Use the smaller of (Height based calculation) or (Width based calculation)
-        // This prevents massive text on tall/thin footers, or tiny text on wide footers.
-        
+        // Use footerHeight as the container reference.
         float containerH = footerHeight;
+        
+        // If height is 0, skip text drawing
+        if (containerH <= 0) {
+            return output;
+        }
+
         float paddingEdge = w * 0.04f; // 4% horizontal padding
         
         // Ratios relative to Footer Height
@@ -111,7 +116,7 @@ public class WatermarkUtil {
         float metaTextSize = containerH * 0.18f;
         
         // Cap max size relative to Image Width to avoid overflow on narrow phones
-        float maxTitleW = w * 0.45f;
+        // e.g. if container is very tall but image is narrow
         if (titleTextSize > w * 0.08f) titleTextSize = w * 0.08f;
         
         // Setup Paints
@@ -138,7 +143,7 @@ public class WatermarkUtil {
 
         Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         dividerPaint.setColor(dividerColor);
-        dividerPaint.setStrokeWidth(Math.max(2f, w * 0.002f)); // Line width scales slightly with resolution
+        dividerPaint.setStrokeWidth(Math.max(1f, w * 0.002f)); // Line width
 
         // Shadows for Overlay mode clarity
         if (!config.isFooterMode) {
@@ -193,9 +198,7 @@ public class WatermarkUtil {
 
         } else {
             // === LEFT / SPLIT PROFESSIONAL (Default) ===
-            // This is the classic "Leica/Xiaomi" style layout
             // Left: Logo/Title
-            // Middle: Vertical Divider
             // Right: Exif (Top) / Date+Loc (Bottom)
             
             float leftX = paddingEdge;
@@ -221,9 +224,6 @@ public class WatermarkUtil {
             canvas.drawText(metaText, rightX, metaY, metaPaint);
             
             // 3. Vertical Divider
-            // Calculate position: right side of title + padding, or strictly based on image width?
-            // Let's place it nicely between the two blocks.
-            
             if (config.isFooterMode) {
                 float titleWidth = titlePaint.measureText(titleText);
                 float maxRightW = Math.max(exifPaint.measureText(exifText), metaPaint.measureText(metaText));
