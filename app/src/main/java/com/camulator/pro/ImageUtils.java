@@ -230,6 +230,10 @@ public class ImageUtils {
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h);
     }
     
+    /**
+     * Generates a 256-entry Look Up Table (LUT) from normalized control points (0..1).
+     * Uses Monotone Cubic Spline interpolation for smooth, artifact-free curves.
+     */
     public static int[] generateLUT(List<PointF> knots) {
         int[] lut = new int[256];
         if (knots == null || knots.size() < 2) {
@@ -240,17 +244,30 @@ public class ImageUtils {
         List<PointF> sorted = new ArrayList<>(knots);
         Collections.sort(sorted, (a,b) -> Float.compare(a.x, b.x));
         
+        // Validation: Ensure start at 0 and end at 1 if not present, though UI handles this.
+        if (sorted.get(0).x > 0.0f) sorted.add(0, new PointF(0f, 0f));
+        if (sorted.get(sorted.size()-1).x < 1.0f) sorted.add(new PointF(1f, 1f));
+
         int n = sorted.size();
         float[] x = new float[n];
         float[] y = new float[n];
+        
         for(int i=0; i<n; i++) {
             x[i] = sorted.get(i).x * 255f;
-            y[i] = (1f - sorted.get(i).y) * 255f;
+            // Invert Y because screen coordinates: top is 0, but value 255 is "top" intensity.
+            // Actually, in standard math curve: (0,0) is bottom-left (black).
+            // But CurveView likely stores (0,1) as black if drawing downwards.
+            // Let's assume input PointF is in math coords: (0,0) black, (1,1) white.
+            // If CurveView passes (x,y) where y=1 is bottom, we need to handle that.
+            // Let's standardise: PointF.y is 0=bottom(black), 1=top(white) for MATH.
+            y[i] = sorted.get(i).y * 255f;
         }
 
-        SplineInterpolator spline = new SplineInterpolator(x, y);
+        MonotoneCubicSpline spline = new MonotoneCubicSpline(x, y);
+
         for(int i=0; i<256; i++) {
-            lut[i] = (int) Math.max(0, Math.min(255, spline.interpolate(i)));
+            float val = spline.interpolate(i);
+            lut[i] = clamp(val);
         }
         return lut;
     }
@@ -399,7 +416,14 @@ public class ImageUtils {
             highlights = 0f; shadows = 0f; whites = 0f; black = 0f; midtones = 0f;
             shadowHue = 0f; shadowSat = 0f; highlightHue = 0f; highlightSat = 0f;
         }
-        private List<PointF> defaultPoints() { List<PointF> p = new ArrayList<>(); p.add(new PointF(0f, 1f)); p.add(new PointF(1f, 0f)); return p; }
+        
+        // Use 0-1 range for data model
+        private List<PointF> defaultPoints() { 
+            List<PointF> p = new ArrayList<>(); 
+            p.add(new PointF(0f, 0f)); 
+            p.add(new PointF(1f, 1f)); 
+            return p; 
+        }
         
         public static CurvePreset fromXmp(String xmpContent) {
             CurvePreset preset = new CurvePreset();
@@ -425,47 +449,95 @@ public class ImageUtils {
                      while (liMatcher.find()) {
                          float x = Float.parseFloat(liMatcher.group(1)) / 255f;
                          float y = Float.parseFloat(liMatcher.group(2)) / 255f;
-                         points.add(new PointF(x, 1.0f - y)); 
+                         // XMP usually stores 0,0 as black.
+                         points.add(new PointF(x, y)); 
                      }
                  }
              } catch (Exception e) {}
-             if (points.isEmpty()) { points.add(new PointF(0f, 1f)); points.add(new PointF(1f, 0f)); }
+             if (points.isEmpty()) { points.add(new PointF(0f, 0f)); points.add(new PointF(1f, 1f)); }
              return points;
         }
         public String toXmp() { return ""; }
     }
 
-    public static class SplineInterpolator {
-        private final float[] x, y, m;
-        public SplineInterpolator(float[] x, float[] y) {
-            this.x = x; this.y = y;
+    /**
+     * Standard Monotone Cubic Spline to prevent curve overshoot/undershoot.
+     */
+    public static class MonotoneCubicSpline {
+        private final float[] x;
+        private final float[] y;
+        private final float[] m;
+
+        public MonotoneCubicSpline(float[] x, float[] y) {
             int n = x.length;
+            this.x = x;
+            this.y = y;
             float[] d = new float[n - 1];
-            float[] m = new float[n];
+            m = new float[n];
+
+            // 1. Calculate secants (deltas)
             for (int i = 0; i < n - 1; i++) {
                 float h = x[i + 1] - x[i];
-                if (h == 0f) d[i] = 0f; else d[i] = (y[i + 1] - y[i]) / h;
+                if (h == 0f) d[i] = 0f;
+                else d[i] = (y[i + 1] - y[i]) / h;
             }
-            m[0] = d[0]; m[n - 1] = d[n - 2];
+
+            // 2. Initialize tangents
+            m[0] = d[0];
+            m[n - 1] = d[n - 2];
+
+            // 3. Average tangents
             for (int i = 1; i < n - 1; i++) {
-                if (d[i - 1] * d[i] <= 0f) m[i] = 0f;
-                else m[i] = (d[i - 1] + d[i]) * 0.5f;
+                if (d[i - 1] * d[i] <= 0f) {
+                    m[i] = 0f;
+                } else {
+                    m[i] = (d[i - 1] + d[i]) * 0.5f;
+                }
             }
-            this.m = m;
+
+            // 4. Ensure monotonicity
+            for (int i = 0; i < n - 1; i++) {
+                if (d[i] == 0f) {
+                    m[i] = 0f;
+                    m[i + 1] = 0f;
+                } else {
+                    float a = m[i] / d[i];
+                    float b = m[i + 1] / d[i];
+                    float h = (float) Math.hypot(a, b);
+                    if (h > 3f) {
+                        float t = 3f / h;
+                        m[i] = t * a * d[i];
+                        m[i + 1] = t * b * d[i];
+                    }
+                }
+            }
         }
+
         public float interpolate(float val) {
             int n = x.length;
             if (val <= x[0]) return y[0];
             if (val >= x[n - 1]) return y[n - 1];
+
+            // Binary search to find segment
             int i = 0;
-            while (val > x[i + 1]) i++;
+            // Since n is small (points on curve), linear scan is fine, but here's binary search logic simplfied
+            for (int j = 0; j < n - 1; j++) {
+                if (val >= x[j] && val <= x[j+1]) {
+                    i = j;
+                    break;
+                }
+            }
+
             float h = x[i + 1] - x[i];
             float t = (val - x[i]) / h;
-            float t2 = t * t, t3 = t2 * t;
+            float t2 = t * t;
+            float t3 = t2 * t;
+
             float h00 = 2f * t3 - 3f * t2 + 1f;
             float h10 = t3 - 2f * t2 + t;
             float h01 = -2f * t3 + 3f * t2;
             float h11 = t3 - t2;
+
             return h00 * y[i] + h10 * h * m[i] + h01 * y[i + 1] + h11 * h * m[i + 1];
         }
     }

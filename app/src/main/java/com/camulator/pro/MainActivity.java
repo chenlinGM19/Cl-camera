@@ -4,9 +4,11 @@ import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.app.Activity;
+import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.ColorMatrix;
@@ -83,7 +85,6 @@ public class MainActivity extends AppCompatActivity {
     private CurveView curveView;
     private ConstraintLayout previewContainer, presetEditorContainer;
     private View controlsContainer;
-    private View maskTop, maskBottom;
     private LinearLayout focalLengthContainer, llPresetList;
     private Button btnRatio;
     private ImageView ivLastImage;
@@ -139,8 +140,6 @@ public class MainActivity extends AppCompatActivity {
             curveView = findViewById(R.id.curveView);
             presetEditorContainer = findViewById(R.id.presetEditorContainer);
             controlsContainer = findViewById(R.id.controlsContainer);
-            maskTop = findViewById(R.id.maskTop);
-            maskBottom = findViewById(R.id.maskBottom);
             focalLengthContainer = findViewById(R.id.focalLengthContainer);
             llPresetList = findViewById(R.id.llPresetList);
             btnRatio = findViewById(R.id.btnRatio);
@@ -190,6 +189,7 @@ public class MainActivity extends AppCompatActivity {
                             startCamera();
                             checkAndRequestOptionalPermissions();
                             updateLocation();
+                            loadLastImage();
                         } else {
                             requestPermissions();
                         }
@@ -311,12 +311,10 @@ public class MainActivity extends AppCompatActivity {
                 
                 int targetRatio = (aspectRatioMode == 1) ? AspectRatio.RATIO_16_9 : AspectRatio.RATIO_4_3;
 
-                // 1. Preview (High Res Surface for internal use if needed, though we hide it)
+                // 1. Preview
                 Preview preview = new Preview.Builder().setTargetAspectRatio(targetRatio).build();
                 preview.setSurfaceProvider(viewFinder.getSurfaceProvider());
                 
-                // Consistency Match: 4:3 uses ~960x720, 16:9 uses ~1280x720
-                // This ensures FOV is similar to final capture
                 Size targetResolution;
                 if (aspectRatioMode == 1) {
                     targetResolution = new Size(720, 1280); 
@@ -398,11 +396,9 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 if (!isDestroyed() && !isFinishing() && !isFrozen && finalBitmap != null) {
                     ivPreviewOverlay.setImageBitmap(finalBitmap);
-                    
                     if (ivPreviewOverlay.getRotation() != rotationDegrees) ivPreviewOverlay.setRotation(rotationDegrees);
-                    
-                    ImageView.ScaleType targetScale = (aspectRatioMode == 2) ? ImageView.ScaleType.CENTER_INSIDE : ImageView.ScaleType.CENTER_CROP;
-                    if (ivPreviewOverlay.getScaleType() != targetScale) ivPreviewOverlay.setScaleType(targetScale);
+                    // Use FIT_CENTER to ensure full image visibility within the constrained layout
+                    ivPreviewOverlay.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 }
             });
             useBufferA = !useBufferA;
@@ -410,6 +406,33 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { 
             try { image.close(); } catch(Exception ignored) {} 
         }
+    }
+    
+    // Helper to query and load the latest image
+    private void loadLastImage() {
+        if (!isCameraPermissionGranted()) return;
+        cameraExecutor.execute(() -> {
+             String[] projection = new String[]{ MediaStore.Images.Media._ID };
+             String sortOrder = MediaStore.Images.Media.DATE_TAKEN + " DESC";
+             try (Cursor cursor = getContentResolver().query(
+                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, null, null, sortOrder)) {
+                 if (cursor != null && cursor.moveToFirst()) {
+                     long id = cursor.getLong(0);
+                     Uri uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                     Bitmap thumb = null;
+                     try {
+                         thumb = getContentResolver().loadThumbnail(uri, new Size(200, 200), null);
+                     } catch(IOException e) {}
+                     
+                     if (thumb != null) {
+                         final Bitmap finalThumb = thumb;
+                         runOnUiThread(() -> {
+                             if (!isDestroyed()) ivLastImage.setImageBitmap(finalThumb);
+                         });
+                     }
+                 }
+             } catch(Exception e) {}
+        });
     }
 
     private void takePhoto() {
@@ -454,12 +477,16 @@ public class MainActivity extends AppCompatActivity {
                             Bitmap processed = ImageUtils.processImage(bitmap, presetUsed, wm, crop);
                             Uri savedUri = saveImage(processed);
                             if (savedUri != null) {
-                                runOnUiThread(() -> {
-                                    if (!isDestroyed()) {
-                                        ivLastImage.setImageBitmap(processed);
-                                        Toast.makeText(getApplicationContext(), "Saved", Toast.LENGTH_SHORT).show();
-                                    }
-                                });
+                                // Load the thumbnail for the newly saved URI
+                                try {
+                                    Bitmap thumb = getContentResolver().loadThumbnail(savedUri, new Size(200, 200), null);
+                                    runOnUiThread(() -> {
+                                        if (!isDestroyed()) {
+                                            ivLastImage.setImageBitmap(thumb);
+                                            Toast.makeText(getApplicationContext(), "Saved", Toast.LENGTH_SHORT).show();
+                                        }
+                                    });
+                                } catch(Exception e) {}
                             }
                         }
                     } catch (Exception e) {}
@@ -685,8 +712,7 @@ public class MainActivity extends AppCompatActivity {
              previewContainer.setLayoutParams(params);
              
              // Reset scale type logic
-             ImageView.ScaleType targetScale = (aspectRatioMode == 2) ? ImageView.ScaleType.CENTER_INSIDE : ImageView.ScaleType.CENTER_CROP;
-             ivPreviewOverlay.setScaleType(targetScale);
+             ivPreviewOverlay.setScaleType(ImageView.ScaleType.FIT_CENTER);
         }
 
         frozenBitmap = null;
@@ -709,20 +735,20 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void updateAspectRatioUI() {
-        if (btnRatio == null) return;
+        if (btnRatio == null || previewContainer == null) return;
+        ConstraintLayout.LayoutParams params = (ConstraintLayout.LayoutParams) previewContainer.getLayoutParams();
+        
         if (aspectRatioMode == 0) { 
             btnRatio.setText("4:3");
-            if (maskTop != null) maskTop.setVisibility(View.GONE);
-            if (maskBottom != null) maskBottom.setVisibility(View.GONE);
+            params.dimensionRatio = "3:4";
         } else if (aspectRatioMode == 1) { 
             btnRatio.setText("16:9");
-            if (maskTop != null) maskTop.setVisibility(View.GONE);
-            if (maskBottom != null) maskBottom.setVisibility(View.GONE);
+            params.dimensionRatio = "9:16";
         } else { 
             btnRatio.setText("1:1");
-            if (maskTop != null) maskTop.setVisibility(View.VISIBLE);
-            if (maskBottom != null) maskBottom.setVisibility(View.VISIBLE);
+            params.dimensionRatio = "1:1";
         }
+        previewContainer.setLayoutParams(params);
     }
 
     private void showWatermarkSettingsDialog() {
@@ -987,6 +1013,7 @@ public class MainActivity extends AppCompatActivity {
             if (isCameraPermissionGranted()) {
                 startCamera();
                 updateLocation();
+                loadLastImage();
             }
         }
     }
