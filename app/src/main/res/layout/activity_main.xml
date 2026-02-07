@@ -16,6 +16,34 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent" />
 
+    <!-- EV Slider (Exposure Compensation) -->
+    <LinearLayout
+        android:layout_width="40dp"
+        android:layout_height="200dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="#40000000"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/topBar"
+        android:layout_marginTop="20dp"
+        android:layout_marginEnd="10dp">
+        
+        <TextView android:text="EV" android:textColor="#FFF" android:textSize="10sp"/>
+        <com.google.android.material.slider.Slider
+            android:id="@+id/evSlider"
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:valueFrom="-4.0"
+            android:valueTo="4.0"
+            android:stepSize="1.0"
+            android:value="0.0"
+            app:thumbColor="#FF9800"
+            app:trackColorActive="#FF9800"
+            app:trackColorInactive="#888888"
+            android:rotation="270"/>
+    </LinearLayout>
+
     <!-- Shutter Blackout Overlay -->
     <View
         android:id="@+id/shutterOverlay"
@@ -92,7 +120,6 @@
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent"/>
             
-        <!-- Hidden button overlay for click -->
         <View
             android:id="@+id/btnGallery"
             android:layout_width="50dp"
@@ -142,40 +169,32 @@
     <LinearLayout
         android:id="@+id/layoutEditor"
         android:layout_width="match_parent"
-        android:layout_height="350dp"
+        android:layout_height="380dp"
         android:orientation="vertical"
-        android:background="#EE000000"
+        android:background="#F0000000"
         android:clickable="true"
         android:focusable="true"
         android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@id/bottomBar">
 
         <!-- Tab Headers -->
-        <LinearLayout
-            android:layout_width="match_parent"
+        <HorizontalScrollView 
+            android:layout_width="match_parent" 
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="8dp">
-            <TextView
-                android:id="@+id/tabCurves"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+            android:scrollbars="none">
+            <LinearLayout
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Curves"
-                android:textAlignment="center"
-                android:textStyle="bold"
-                android:textColor="#FF9800"/>
-            <TextView
-                android:id="@+id/tabWatermark"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:text="Watermark"
-                android:textAlignment="center"
-                android:textColor="#FFFFFF"/>
-        </LinearLayout>
+                android:orientation="horizontal"
+                android:padding="8dp">
+                <TextView android:id="@+id/tabCurves" android:text="Curves" style="@style/ChannelBtn" android:textColor="#FF9800"/>
+                <TextView android:id="@+id/tabLight" android:text="Light" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/tabColor" android:text="Color" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/tabWatermark" android:text="Watermark" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
+            </LinearLayout>
+        </HorizontalScrollView>
 
-        <!-- Curves Container -->
+        <!-- 1. Curves Container -->
         <LinearLayout
             android:id="@+id/containerCurves"
             android:layout_width="match_parent"
@@ -189,11 +208,10 @@
                 android:orientation="horizontal"
                 android:layout_marginBottom="8dp"
                 android:gravity="center">
-                
-                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FFFFFF"/>
-                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FF4444"/>
-                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#44FF44"/>
-                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#4444FF"/>
+                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:textColor="#FF4444"/>
+                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:textColor="#44FF44"/>
+                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:textColor="#4444FF"/>
             </LinearLayout>
 
             <com.camulator.pro.ui.CurveView
@@ -204,7 +222,55 @@
                 android:background="#222"/>
         </LinearLayout>
 
-        <!-- Watermark Container -->
+        <!-- 2. Light Container (Sliders) -->
+        <ScrollView
+            android:id="@+id/containerLight"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"
+            android:padding="16dp">
+            <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+                
+                <TextView android:text="Highlights" style="@style/EditorLabel"/>
+                <SeekBar android:id="@+id/seekHighlights" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+
+                <TextView android:text="Shadows" style="@style/EditorLabel"/>
+                <SeekBar android:id="@+id/seekShadows" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+
+                <TextView android:text="Whites" style="@style/EditorLabel"/>
+                <SeekBar android:id="@+id/seekWhites" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+
+                <TextView android:text="Blacks" style="@style/EditorLabel"/>
+                <SeekBar android:id="@+id/seekBlacks" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- 3. Color Grading Container -->
+        <LinearLayout
+            android:id="@+id/containerColor"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"
+            android:orientation="vertical"
+            android:padding="8dp">
+            
+            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center">
+                 <TextView android:id="@+id/btnGradeShadows" android:text="Shadows" style="@style/ChannelBtn" android:textColor="#FF9800"/>
+                 <TextView android:id="@+id/btnGradeMids" android:text="Midtones" style="@style/ChannelBtn" android:textColor="#FFF"/>
+                 <TextView android:id="@+id/btnGradeHighs" android:text="Highlights" style="@style/ChannelBtn" android:textColor="#FFF"/>
+            </LinearLayout>
+
+            <com.camulator.pro.ui.ColorWheelView
+                android:id="@+id/colorWheel"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_margin="16dp"/>
+                
+            <TextView android:id="@+id/colorInfo" android:text="Neutral" android:gravity="center" android:textColor="#888" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        </LinearLayout>
+
+        <!-- 4. Watermark Container -->
         <ScrollView
             android:id="@+id/containerWatermark"
             android:layout_width="match_parent"
@@ -233,7 +299,7 @@
                         android:id="@+id/rbFooter" 
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Footer Frame" 
+                        android:text="Footer" 
                         android:textColor="#FFF" 
                         android:checked="true"/>
                     <RadioButton 
@@ -250,18 +316,12 @@
                    android:layout_height="wrap_content"
                    android:orientation="horizontal"
                    android:gravity="center_vertical">
-                   <TextView 
-                       android:layout_width="wrap_content"
-                       android:layout_height="wrap_content"
-                       android:text="Background:" 
-                       android:textColor="#CCC" 
-                       android:layout_marginEnd="8dp"/>
                    <ToggleButton
                        android:id="@+id/toggleBgColor"
                        android:layout_width="60dp"
                        android:layout_height="30dp"
-                       android:textOn="White"
-                       android:textOff="Black"
+                       android:textOn="Wht"
+                       android:textOff="Blk"
                        android:checked="true"/>
                    <TextView 
                        android:layout_width="wrap_content"
@@ -278,7 +338,7 @@
                 <TextView 
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Custom Text (Logo)" 
+                    android:text="Logo Text" 
                     android:textColor="#CCC" 
                     android:textSize="12sp" 
                     android:layout_marginTop="8dp"/>
@@ -290,62 +350,10 @@
                     android:textColor="#FFF"
                     android:backgroundTint="#FF9800"/>
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="4dp">
-                    <CheckBox 
-                        android:id="@+id/cbDate" 
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:text="Date/Time" 
-                        android:textColor="#FFF" 
-                        android:checked="true" 
-                        android:layout_weight="1"/>
-                    <CheckBox 
-                        android:id="@+id/cbGPS" 
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:text="GPS Coords" 
-                        android:textColor="#FFF" 
-                        android:checked="true" 
-                        android:layout_weight="1"/>
-                </LinearLayout>
-
                 <TextView 
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Location Detail" 
-                    android:textColor="#CCC" 
-                    android:textSize="12sp" 
-                    android:layout_marginTop="4dp"/>
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-                    <CheckBox 
-                        android:id="@+id/cbCity" 
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:text="City/District" 
-                        android:textColor="#FFF" 
-                        android:checked="true" 
-                        android:layout_weight="1"/>
-                    <CheckBox 
-                        android:id="@+id/cbStreet" 
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:text="Street" 
-                        android:textColor="#FFF" 
-                        android:checked="false" 
-                        android:layout_weight="1"/>
-                </LinearLayout>
-
-                <TextView 
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Frame Height (%)" 
+                    android:text="Size" 
                     android:textColor="#CCC" 
                     android:textSize="12sp" 
                     android:layout_marginTop="8dp"/>
@@ -353,9 +361,8 @@
                     android:id="@+id/seekHeight"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:max="10"
-                    android:progress="6"/>
-
+                    android:max="100"
+                    android:progress="20"/>
             </LinearLayout>
         </ScrollView>
     </LinearLayout>

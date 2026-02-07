@@ -15,7 +15,7 @@ public class WatermarkUtil {
         public boolean isFooterMode = true; // true = Footer Frame, false = Overlay
         public boolean isWhiteBg = true;
         public int align = 0; // 0=Left, 1=Center, 2=Right
-        public float heightPercent = 0.12f; // Increased default for better spacing
+        public float heightPercent = 0.12f; // Controls relative height
         public String customText = "";
         public boolean showDate = true;
         public boolean showGPS = true;
@@ -23,18 +23,22 @@ public class WatermarkUtil {
         public boolean showStreet = false;
         public String dateStr = "";
         public String locStr = "";
-        public String exifInfo = ""; // New: Shutter, ISO, Aperture, etc.
+        public String exifInfo = ""; // Shutter, ISO, Aperture, Focal Length
+        public boolean shouldCrop1to1 = false;
     }
 
     public static Bitmap addWatermark(Bitmap src, WatermarkConfig config) {
         int w = src.getWidth();
         int h = src.getHeight();
         
-        // Calculate dimensions
+        // 1. Calculate Layout Dimensions
+        // In Footer mode, the footer height is explicitly controlled by the slider (heightPercent).
+        // In Overlay mode, we calculate a virtual "zone" to size text proportionally.
         int footerHeight = config.isFooterMode ? (int) (Math.max(w, h) * config.heightPercent) : 0;
-        // Constraint footer height to sensible limits relative to image
-        if (config.isFooterMode) {
-             footerHeight = Math.max(footerHeight, 150); 
+        
+        // Ensure footer isn't too tiny to read
+        if (config.isFooterMode && footerHeight < Math.max(w, h) * 0.05f) {
+             footerHeight = (int)(Math.max(w, h) * 0.05f); 
         }
 
         int outputH = h + footerHeight;
@@ -42,42 +46,44 @@ public class WatermarkUtil {
         Bitmap output = Bitmap.createBitmap(w, outputH, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(output);
         
-        // 1. Draw Original Image
+        // 2. Draw Original Image
         canvas.drawBitmap(src, 0, 0, null);
         
-        // 2. Setup Base Paints
-        int bgColor = config.isWhiteBg ? Color.WHITE : Color.BLACK;
-        int mainTextColor = config.isWhiteBg ? Color.BLACK : Color.WHITE;
-        int subTextColor = config.isWhiteBg ? 0xFF666666 : 0xFFAAAAAA; // Dark Grey or Light Grey
+        // 3. Setup Colors
+        int bgColor = config.isWhiteBg ? 0xFFFFFFFF : 0xFF121212; // Slightly softer black
+        int mainTextColor = config.isWhiteBg ? 0xFF212121 : 0xFFEEEEEE;
+        int subTextColor = config.isWhiteBg ? 0xFF757575 : 0xFF9E9E9E;
+        int accentColor = 0xFFD32F2F; // Leica-ish Red line
         
         Paint bgPaint = new Paint();
         bgPaint.setColor(bgColor);
         bgPaint.setStyle(Paint.Style.FILL);
         
-        // 3. Draw Background / Scrim
+        // 4. Draw Footer / Overlay Scrim
         if (config.isFooterMode) {
             canvas.drawRect(0, h, w, outputH, bgPaint);
         } else {
-            // Overlay Mode: Draw gradient scrim at bottom for readability
-            int scrimHeight = (int) (h * 0.25f);
+            // Overlay Mode: Clean Gradient
+            int scrimHeight = (int) (h * 0.35f);
             Paint scrimPaint = new Paint();
             scrimPaint.setShader(new LinearGradient(
                     0, h - scrimHeight, 
                     0, h, 
                     0x00000000, 
-                    0x99000000, // Semi-transparent black
+                    0xCC000000, 
                     Shader.TileMode.CLAMP));
             canvas.drawRect(0, h - scrimHeight, w, h, scrimPaint);
             
-            // Force text colors for Overlay
-            mainTextColor = Color.WHITE;
+            mainTextColor = 0xFFFFFFFF;
             subTextColor = 0xFFDDDDDD; 
         }
         
-        // 4. Prepare Text Content
+        // 5. Prepare Text Strings
         String titleText = config.customText.isEmpty() ? "Camulator Pro" : config.customText;
-        
-        // Construct Metadata String (Line 2)
+        String modelText = android.os.Build.MODEL.toUpperCase();
+        if (modelText.length() > 10) modelText = android.os.Build.MANUFACTURER.toUpperCase();
+
+        // Combine date and location nicely
         StringBuilder metaBuilder = new StringBuilder();
         if (config.showDate && !config.dateStr.isEmpty()) {
             metaBuilder.append(config.dateStr);
@@ -87,163 +93,147 @@ public class WatermarkUtil {
             metaBuilder.append(config.locStr);
         }
         String metaText = metaBuilder.toString();
-        
-        // Exif String (Line 1 of details)
         String exifText = config.exifInfo;
 
-        // 5. Configure Text Paints
-        // Base Unit based on width to scale with image resolution
-        float baseUnit = Math.min(w, h) / 1000f; 
+        // 6. Typography & Sizing
+        // Base Unit calculation
+        float baseUnit = config.isFooterMode ? footerHeight : (Math.min(w, h) * 0.15f);
         
+        float titleSize = baseUnit * 0.28f; 
+        float exifSize = baseUnit * 0.19f;
+        float metaSize = baseUnit * 0.17f;
+
+        // Paints
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(mainTextColor);
-        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        titlePaint.setTextSize(baseUnit * 45f); // Large Title
+        titlePaint.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
+        titlePaint.setTextSize(titleSize);
+        // Letter spacing for "Premium" feel
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            titlePaint.setLetterSpacing(0.05f);
+        }
 
         Paint exifPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        exifPaint.setColor(mainTextColor); // Exif usually same as title or slightly lighter
-        exifPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        exifPaint.setTextSize(baseUnit * 28f);
+        exifPaint.setColor(mainTextColor); 
+        exifPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); // Bold EXIF looks better
+        exifPaint.setTextSize(exifSize);
 
         Paint metaPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         metaPaint.setColor(subTextColor);
-        metaPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
-        metaPaint.setTextSize(baseUnit * 26f);
+        metaPaint.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+        metaPaint.setTextSize(metaSize);
 
-        // Shadow for overlay mode only
+        // Divider Line Paint
+        Paint linePaint = new Paint();
+        linePaint.setColor(subTextColor); 
+        linePaint.setStrokeWidth(baseUnit * 0.02f); 
+        linePaint.setAlpha(80);
+
+        // Shadows for Overlay mode
         if (!config.isFooterMode) {
-            titlePaint.setShadowLayer(4, 2, 2, Color.BLACK);
-            exifPaint.setShadowLayer(3, 1, 1, Color.BLACK);
-            metaPaint.setShadowLayer(3, 1, 1, Color.BLACK);
+            titlePaint.setShadowLayer(4, 2, 2, 0xAA000000);
+            exifPaint.setShadowLayer(3, 1, 1, 0xAA000000);
+            metaPaint.setShadowLayer(3, 1, 1, 0xAA000000);
         }
 
-        // 6. Layout Logic
-        float paddingX = w * 0.04f;
-        float paddingY = footerHeight * 0.25f; // Vertical padding inside footer
+        // 7. Layout Calculation
+        float paddingX = w * 0.05f; // 5% padding from sides
         
-        // Y Position Bases
         float centerY; 
         if (config.isFooterMode) {
             centerY = h + (footerHeight / 2f);
         } else {
-            centerY = h - (h * 0.08f); // Bottom area overlay
+            centerY = h - (baseUnit * 0.6f); 
         }
-        
+
+        // Font Metrics for vertical centering
         Paint.FontMetrics titleFm = titlePaint.getFontMetrics();
-        float titleHeight = titleFm.descent - titleFm.ascent;
+        float titleHalfH = (titleFm.descent - titleFm.ascent) / 2f - titleFm.descent;
         
         Paint.FontMetrics exifFm = exifPaint.getFontMetrics();
-        float exifHeight = exifFm.descent - exifFm.ascent;
-        
-        // Separator Paint
-        Paint linePaint = new Paint();
-        linePaint.setColor(0xFFD32F2F); // Leica Red / Material Red 700
-        linePaint.setStrokeWidth(baseUnit * 4f); 
+        float exifH = exifFm.descent - exifFm.ascent;
 
-        // --- Drawing based on Alignment ---
-        
+        // --- Drawing Logic ---
+
         if (config.align == 1) { 
-            // === CENTER ALIGNMENT (Stacked, Minimalist) ===
+            // === CENTER ALIGN ===
+            // Stacked: Title -> EXIF -> Meta
             titlePaint.setTextAlign(Paint.Align.CENTER);
             exifPaint.setTextAlign(Paint.Align.CENTER);
             metaPaint.setTextAlign(Paint.Align.CENTER);
             
-            float currentY = centerY - (titleHeight + exifHeight + 20) / 2f + Math.abs(titleFm.ascent);
+            float totalH = (titleFm.descent - titleFm.ascent) + (exifH) + (metaSize * 2f);
+            float startY = centerY - (totalH / 2f) + Math.abs(titleFm.ascent);
             
-            // Draw Title
-            canvas.drawText(titleText, w / 2f, currentY, titlePaint);
+            canvas.drawText(titleText, w / 2f, startY, titlePaint);
             
-            // Draw Exif below Title
-            currentY += titleFm.descent + 10 + Math.abs(exifFm.ascent);
-            canvas.drawText(exifText.isEmpty() ? metaText : exifText, w / 2f, currentY, exifPaint);
+            startY += titleFm.descent + (baseUnit * 0.15f) + Math.abs(exifFm.ascent);
+            canvas.drawText(exifText.isEmpty() ? modelText : exifText, w / 2f, startY, exifPaint);
             
-            // If we have both Exif and Meta, maybe skip Meta in Center mode to avoid clutter, 
-            // or draw it very small. Let's draw Meta if Exif exists.
-            if (!exifText.isEmpty() && !metaText.isEmpty()) {
-                currentY += exifFm.descent + 10 + Math.abs(metaPaint.getFontMetrics().ascent);
-                 canvas.drawText(metaText, w / 2f, currentY, metaPaint);
-            }
+            startY += exifFm.descent + (baseUnit * 0.1f) + Math.abs(metaPaint.getFontMetrics().ascent);
+            canvas.drawText(metaText, w / 2f, startY, metaPaint);
 
         } else if (config.align == 2) {
-            // === RIGHT ALIGNMENT ===
-            // Not strictly right-justified text, but content on the right side.
-            // Professional Look: 
-            // [Meta/Exif] | [Title] (Right aligned)
-            
-            float rightEdge = w - paddingX;
-            
-            // 1. Draw Title on Right
+            // === RIGHT ALIGN ===
+            // Everything right aligned
+            float rightX = w - paddingX;
             titlePaint.setTextAlign(Paint.Align.RIGHT);
-            float titleBaseY = centerY - (titleFm.ascent + titleFm.descent) / 2f;
-            canvas.drawText(titleText, rightEdge, titleBaseY, titlePaint);
+            exifPaint.setTextAlign(Paint.Align.RIGHT);
+            metaPaint.setTextAlign(Paint.Align.RIGHT);
             
-            // 2. Draw Separator Line to the left of Title
-            float titleW = titlePaint.measureText(titleText);
-            float lineX = rightEdge - titleW - (paddingX * 0.8f);
+            canvas.drawText(titleText, rightX, centerY + titleHalfH - (exifH * 0.8f), titlePaint);
             
-            // Only draw line and details if footer mode
+            // Divider
             if (config.isFooterMode) {
-                float lineH = titleHeight * 0.8f;
-                canvas.drawLine(lineX, centerY - lineH/2, lineX, centerY + lineH/2, linePaint);
-                
-                // 3. Draw Exif and Meta to the LEFT of the line
-                exifPaint.setTextAlign(Paint.Align.RIGHT);
-                metaPaint.setTextAlign(Paint.Align.RIGHT);
-                
-                float detailsRight = lineX - (paddingX * 0.8f);
-                float halfGap = (exifHeight * 0.15f);
-                
-                // Exif (Top)
-                canvas.drawText(exifText, detailsRight, centerY - halfGap, exifPaint);
-                // Meta (Bottom)
-                canvas.drawText(metaText, detailsRight, centerY + exifHeight - halfGap, metaPaint);
-            } else {
-                 // In overlay, just stack them on right
-                 float y = titleBaseY + titleHeight * 0.8f;
-                 exifPaint.setTextAlign(Paint.Align.RIGHT);
-                 canvas.drawText(exifText + "  " + metaText, rightEdge, y, exifPaint);
+                 float lineY = centerY + titleHalfH + (baseUnit * 0.1f);
+                 canvas.drawLine(rightX, lineY, rightX - (w*0.3f), lineY, linePaint);
             }
             
+            canvas.drawText(exifText + " " + metaText, rightX, centerY + titleHalfH + (exifH * 1.2f), exifPaint);
+
         } else {
-            // === LEFT ALIGNMENT (Default Pro Look) ===
-            // [Title] | [Exif]
-            //         | [Meta]
+            // === LEFT / SPLIT ALIGN (Default Professional Look) ===
+            // Left: Title (Logo)
+            // Right: Data (EXIF top, Date/Loc bottom)
+            // Divider: Vertical line in between
             
-            float leftEdge = paddingX;
+            float leftX = paddingX;
+            float rightX = w - paddingX;
             
-            // 1. Draw Title on Left
             titlePaint.setTextAlign(Paint.Align.LEFT);
-            float titleBaseY = centerY - (titleFm.ascent + titleFm.descent) / 2f;
-            canvas.drawText(titleText, leftEdge, titleBaseY, titlePaint);
+            // Draw Title vertically centered
+            canvas.drawText(titleText, leftX, centerY + titleHalfH, titlePaint);
             
+            // Draw Right Side Data
+            exifPaint.setTextAlign(Paint.Align.RIGHT);
+            metaPaint.setTextAlign(Paint.Align.RIGHT);
+            
+            float dataCenterY = centerY;
+            
+            // EXIF Line
+            canvas.drawText(exifText, rightX, dataCenterY - (baseUnit * 0.08f), exifPaint);
+            
+            // Meta Line
+            canvas.drawText(metaText, rightX, dataCenterY + exifH + (baseUnit * 0.08f), metaPaint);
+            
+            // Vertical Divider
             if (config.isFooterMode) {
-                // 2. Draw Separator Line to the right of Title
-                float titleW = titlePaint.measureText(titleText);
-                float lineX = leftEdge + titleW + (paddingX * 0.8f);
+                float titleWidth = titlePaint.measureText(titleText);
+                float lineX = leftX + titleWidth + (w * 0.04f);
                 
-                float lineH = titleHeight * 0.8f;
-                canvas.drawLine(lineX, centerY - lineH/2, lineX, centerY + lineH/2, linePaint);
-                
-                // 3. Draw Details to right of Line
-                exifPaint.setTextAlign(Paint.Align.LEFT);
-                metaPaint.setTextAlign(Paint.Align.LEFT);
-                
-                float detailsLeft = lineX + (paddingX * 0.8f);
-                float halfGap = (exifHeight * 0.15f);
-                
-                // Exif (Top)
-                canvas.drawText(exifText, detailsLeft, centerY - halfGap, exifPaint);
-                // Meta (Bottom)
-                // Use ascent to align baseline correctly relative to center
-                Paint.FontMetrics metaFm = metaPaint.getFontMetrics();
-                float metaBaseY = centerY + exifHeight - halfGap; 
-                // Adjust if only one line exists? No, keep layout consistent.
-                canvas.drawText(metaText, detailsLeft, metaBaseY, metaPaint);
-            } else {
-                // Overlay: Stack below title
-                float y = titleBaseY + titleHeight * 0.8f;
-                exifPaint.setTextAlign(Paint.Align.LEFT);
-                canvas.drawText(exifText + "  " + metaText, leftEdge, y, exifPaint);
+                // Only draw divider if it doesn't overlap right text
+                float maxRightTextW = Math.max(exifPaint.measureText(exifText), metaPaint.measureText(metaText));
+                if (lineX < (rightX - maxRightTextW - (w * 0.04f))) {
+                    float lineH = baseUnit * 0.5f;
+                    canvas.drawLine(lineX, centerY - lineH/2, lineX, centerY + lineH/2, linePaint);
+                    
+                    // Draw Model Name next to divider if space permits
+                    Paint modelPaint = new Paint(metaPaint);
+                    modelPaint.setColor(subTextColor);
+                    modelPaint.setTextAlign(Paint.Align.LEFT);
+                    modelPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+                    canvas.drawText(modelText, lineX + (w * 0.04f), centerY + titleHalfH, modelPaint);
+                }
             }
         }
 

@@ -1,9 +1,8 @@
 package com.camulator.pro;
 
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Rect;
-import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -17,7 +16,6 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.FileProvider;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -44,16 +42,14 @@ public class GalleryActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_gallery);
         
-        // Toolbar
         findViewById(R.id.btnBack).setOnClickListener(v -> finish());
         
         tvEmpty = findViewById(R.id.tvEmpty);
         RecyclerView rv = findViewById(R.id.rvGallery);
         
-        // 3 Columns Grid
         int spanCount = 3;
         rv.setLayoutManager(new GridLayoutManager(this, spanCount));
-        rv.addItemDecoration(new GridSpacingItemDecoration(spanCount, 8, true));
+        rv.addItemDecoration(new GridSpacingItemDecoration(spanCount, 4, true));
         
         adapter = new GalleryAdapter(fileList);
         rv.setAdapter(adapter);
@@ -67,17 +63,32 @@ public class GalleryActivity extends AppCompatActivity {
         loadExecutor.shutdown();
     }
     
+    @Override
+    protected void onResume() {
+        super.onResume();
+        loadImages(); // Reload if deletion happened
+    }
+    
     private void loadImages() {
         loadExecutor.execute(() -> {
-            File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            // Load from Public directory first
+            File publicDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "CamulatorPro");
             List<File> files = new ArrayList<>();
-            if (dir != null && dir.listFiles() != null) {
-                File[] fArray = dir.listFiles((d, name) -> name.endsWith(".jpg") || name.endsWith(".jpeg"));
-                if (fArray != null) {
-                    files.addAll(Arrays.asList(fArray));
-                    // Sort new to old
-                    Collections.sort(files, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
-                }
+            
+            if (publicDir.exists() && publicDir.listFiles() != null) {
+                File[] fArray = publicDir.listFiles((d, name) -> name.toLowerCase().endsWith(".jpg") || name.toLowerCase().endsWith(".jpeg"));
+                if (fArray != null) files.addAll(Arrays.asList(fArray));
+            }
+            
+            // Also check internal cache/files if we had any legacy files
+            File privateDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            if (privateDir != null && privateDir.listFiles() != null) {
+                 File[] fArray = privateDir.listFiles((d, name) -> name.toLowerCase().endsWith(".jpg"));
+                 if (fArray != null) files.addAll(Arrays.asList(fArray));
+            }
+
+            if (!files.isEmpty()) {
+                Collections.sort(files, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
             }
             
             new Handler(Looper.getMainLooper()).post(() -> {
@@ -93,22 +104,21 @@ public class GalleryActivity extends AppCompatActivity {
         tvEmpty.setVisibility(fileList.isEmpty() ? View.VISIBLE : View.GONE);
     }
     
-    private void openImage(File file) {
-        try {
-            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(uri, "image/*");
-            intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(intent);
-        } catch (Exception e) {
-            Toast.makeText(this, "Cannot open image", Toast.LENGTH_SHORT).show();
-        }
+    private void openImage(int position) {
+        // Pass the folder path and the current file name to avoid passing huge list
+        if (position < 0 || position >= fileList.size()) return;
+        
+        File target = fileList.get(position);
+        Intent intent = new Intent(this, PhotoDetailActivity.class);
+        intent.putExtra("current_path", target.getAbsolutePath());
+        intent.putExtra("folder_path", target.getParent()); 
+        startActivity(intent);
     }
     
     private void confirmDelete(int position) {
         new AlertDialog.Builder(this)
             .setTitle("Delete Photo")
-            .setMessage("Are you sure you want to delete this photo?")
+            .setMessage("Are you sure?")
             .setPositiveButton("Delete", (dialog, which) -> deleteImage(position))
             .setNegativeButton("Cancel", null)
             .show();
@@ -120,13 +130,10 @@ public class GalleryActivity extends AppCompatActivity {
             fileList.remove(position);
             adapter.notifyItemRemoved(position);
             updateEmptyState();
-            Toast.makeText(this, "Photo deleted", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this, "Failed to delete", Toast.LENGTH_SHORT).show();
         }
     }
-    
-    // --- Adapter ---
     
     private class GalleryAdapter extends RecyclerView.Adapter<GalleryAdapter.ViewHolder> {
         private final List<File> images;
@@ -141,21 +148,19 @@ public class GalleryActivity extends AppCompatActivity {
             SquareImageView iv = new SquareImageView(parent.getContext());
             iv.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            iv.setBackgroundColor(0xFF222222); 
             return new ViewHolder(iv);
         }
 
         @Override
         public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
             File file = images.get(position);
-            
             Glide.with(holder.itemView)
                  .load(file)
                  .diskCacheStrategy(DiskCacheStrategy.ALL)
                  .centerCrop()
                  .into((ImageView) holder.itemView);
                  
-            holder.itemView.setOnClickListener(v -> openImage(file));
+            holder.itemView.setOnClickListener(v -> openImage(holder.getAdapterPosition()));
             holder.itemView.setOnLongClickListener(v -> {
                 confirmDelete(holder.getAdapterPosition());
                 return true;
@@ -174,50 +179,33 @@ public class GalleryActivity extends AppCompatActivity {
         }
     }
     
-    // Simple helper view for square grid items
     private class SquareImageView extends androidx.appcompat.widget.AppCompatImageView {
-        public SquareImageView(android.content.Context context) {
-            super(context);
-        }
-        @Override
-        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-            super.onMeasure(widthMeasureSpec, widthMeasureSpec); // Height = Width
-        }
+        public SquareImageView(android.content.Context context) { super(context); }
+        @Override protected void onMeasure(int w, int h) { super.onMeasure(w, w); }
     }
-    
-    // --- Item Decoration ---
     
     public static class GridSpacingItemDecoration extends RecyclerView.ItemDecoration {
         private int spanCount;
-        private int spacing; // px
+        private int spacing; 
         private boolean includeEdge;
-
         public GridSpacingItemDecoration(int spanCount, int spacingDp, boolean includeEdge) {
             this.spanCount = spanCount;
-            // quick px conversion
             this.spacing = (int) (spacingDp * android.content.res.Resources.getSystem().getDisplayMetrics().density);
             this.includeEdge = includeEdge;
         }
-
         @Override
         public void getItemOffsets(@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
             int position = parent.getChildAdapterPosition(view); 
             int column = position % spanCount; 
-
             if (includeEdge) {
                 outRect.left = spacing - column * spacing / spanCount;
                 outRect.right = (column + 1) * spacing / spanCount;
-
-                if (position < spanCount) { 
-                    outRect.top = spacing;
-                }
+                if (position < spanCount) outRect.top = spacing;
                 outRect.bottom = spacing; 
             } else {
                 outRect.left = column * spacing / spanCount; 
                 outRect.right = spacing - (column + 1) * spacing / spanCount;
-                if (position >= spanCount) {
-                    outRect.top = spacing; 
-                }
+                if (position >= spanCount) outRect.top = spacing; 
             }
         }
     }
