@@ -21,7 +21,6 @@ import android.os.Vibrator;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.util.Size;
-import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -30,11 +29,11 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.RadioGroup;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.RadioGroup;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -125,75 +124,94 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        // Immersive Full Screen
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            WindowInsetsController controller = getWindow().getInsetsController();
-            if (controller != null) {
-                controller.hide(WindowInsets.Type.statusBars());
+        try {
+            // Immersive Full Screen
+            getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                WindowInsetsController controller = getWindow().getInsetsController();
+                if (controller != null) {
+                    controller.hide(WindowInsets.Type.statusBars());
+                }
             }
-        }
-        
-        setContentView(R.layout.activity_main);
+            
+            setContentView(R.layout.activity_main);
 
-        // Bind Views
-        viewFinder = findViewById(R.id.viewFinder);
-        ivPreviewOverlay = findViewById(R.id.ivPreviewOverlay);
-        vShutterFlash = findViewById(R.id.vShutterFlash);
-        curveView = findViewById(R.id.curveView);
-        presetEditorContainer = findViewById(R.id.presetEditorContainer);
-        controlsContainer = findViewById(R.id.controlsContainer);
-        maskTop = findViewById(R.id.maskTop);
-        maskBottom = findViewById(R.id.maskBottom);
-        focalLengthContainer = findViewById(R.id.focalLengthContainer);
-        filterContainer = findViewById(R.id.filterContainer);
-        llPresetList = findViewById(R.id.llPresetList);
-        btnRatio = findViewById(R.id.btnRatio);
-        sbSaturation = findViewById(R.id.sbSaturation);
-        ivLastImage = findViewById(R.id.ivLastImage);
-        
-        vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
-        curveView.setOnCurveChangeListener(this::triggerPreviewUpdate);
+            // Bind Views
+            viewFinder = findViewById(R.id.viewFinder);
+            ivPreviewOverlay = findViewById(R.id.ivPreviewOverlay);
+            vShutterFlash = findViewById(R.id.vShutterFlash);
+            curveView = findViewById(R.id.curveView);
+            presetEditorContainer = findViewById(R.id.presetEditorContainer);
+            controlsContainer = findViewById(R.id.controlsContainer);
+            maskTop = findViewById(R.id.maskTop);
+            maskBottom = findViewById(R.id.maskBottom);
+            focalLengthContainer = findViewById(R.id.focalLengthContainer);
+            filterContainer = findViewById(R.id.filterContainer);
+            llPresetList = findViewById(R.id.llPresetList);
+            btnRatio = findViewById(R.id.btnRatio);
+            sbSaturation = findViewById(R.id.sbSaturation);
+            ivLastImage = findViewById(R.id.ivLastImage);
+            
+            try {
+                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            } catch (Exception e) {
+                Log.e("MainActivity", "Vibrator service failed", e);
+            }
+            
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+            if (curveView != null) {
+                curveView.setOnCurveChangeListener(this::triggerPreviewUpdate);
+            }
 
-        // Hide raw preview, show overlay
-        viewFinder.setVisibility(View.INVISIBLE); 
-        // Hack: Keep it attached for CameraX lifecycle but invisible
-        viewFinder.setAlpha(0f);
-        viewFinder.setVisibility(View.VISIBLE);
+            // Hide raw preview, show overlay
+            if (viewFinder != null) {
+                viewFinder.setVisibility(View.INVISIBLE); 
+                viewFinder.setAlpha(0f);
+                viewFinder.setVisibility(View.VISIBLE);
+            }
 
-        loadDefaultPresets();
-        setupControls();
-        setupFocalLengthButtons();
-        setupFilterButtons();
-        refreshPresetListUI();
-        setupImportExport();
-        cameraExecutor = Executors.newSingleThreadExecutor();
+            loadDefaultPresets();
+            setupControls();
+            setupFocalLengthButtons();
+            setupFilterButtons();
+            refreshPresetListUI();
+            setupImportExport();
+            cameraExecutor = Executors.newSingleThreadExecutor();
 
-        if (isCameraPermissionGranted()) {
-            startCamera();
-            checkAndRequestOptionalPermissions();
-            updateLocation();
-        } else {
-            requestPermissions();
+            if (isCameraPermissionGranted()) {
+                startCamera();
+                checkAndRequestOptionalPermissions();
+                updateLocation();
+            } else {
+                requestPermissions();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            Toast.makeText(this, "Error initializing app: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
     
     private void performHaptic() {
-        if (vibrator != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK));
-            } else {
-                vibrator.vibrate(20);
+        try {
+            if (vibrator != null && ContextCompat.checkSelfPermission(this, Manifest.permission.VIBRATE) == PackageManager.PERMISSION_GRANTED) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK));
+                } else {
+                    vibrator.vibrate(20);
+                }
             }
+        } catch (Exception e) {
+            // Ignore haptic errors
         }
     }
 
     private void startCamera() {
+        if (isDestroyed() || isFinishing()) return;
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
         cameraProviderFuture.addListener(() -> {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                if (cameraProvider == null) return;
                 
                 int targetRatio = (aspectRatioMode == 1) ? AspectRatio.RATIO_16_9 : AspectRatio.RATIO_4_3;
 
@@ -224,13 +242,20 @@ public class MainActivity extends AppCompatActivity {
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
                 cameraProvider.unbindAll();
-                camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis, imageCapture);
                 
-                calculateBaseFocalLength();
-                applyFocalLengthZoom(selectedFocalLength);
+                try {
+                    camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis, imageCapture);
+                    calculateBaseFocalLength();
+                    applyFocalLengthZoom(selectedFocalLength);
+                } catch (IllegalArgumentException e) {
+                    // Fallback if RGBA8888 is not supported (rare, but possible on legacy devices)
+                    Toast.makeText(this, "Camera bind failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
 
             } catch (ExecutionException | InterruptedException e) {
                 Log.e("Camera", "Binding failed", e);
+            } catch (Exception e) {
+                Log.e("Camera", "Unexpected error", e);
             }
         }, ContextCompat.getMainExecutor(this));
     }
@@ -245,6 +270,13 @@ public class MainActivity extends AppCompatActivity {
 
             int width = image.getWidth();
             int height = image.getHeight();
+            
+            // Safety check for invalid dimensions
+            if (width <= 0 || height <= 0) {
+                image.close();
+                return;
+            }
+
             int rotationDegrees = image.getImageInfo().getRotationDegrees();
             
             // Double buffering strategy to avoid UI race conditions
@@ -261,30 +293,23 @@ public class MainActivity extends AppCompatActivity {
                 cachedPixelBuffer = new int[width * height];
             }
             
-            ImageProxy.PlaneProxy plane = image.getPlanes()[0];
-            ByteBuffer buffer = plane.getBuffer();
-            buffer.rewind();
-            
-            int pixelStride = plane.getPixelStride();
-            int rowStride = plane.getRowStride();
-            
-            // Robust copy handling
-            if (pixelStride == 4 && rowStride == width * 4) {
-                 // Fast Path: Direct copy
-                 if (buffer.remaining() >= targetBitmap.getByteCount()) {
-                     targetBitmap.copyPixelsFromBuffer(buffer);
-                 }
-            } else {
-                // Slow Path: Handle stride padding manually to prevent crashes
-                // NOTE: CameraX with RGBA8888 usually gives packed buffers, but some devices padding rows.
-                // We fallback to a safe copy logic if needed, but for now, rely on copyPixelsFromBuffer
-                // catching size issues via try-catch, or simply accept that minor corruption is better than crash.
-                // If the buffer is large enough, we copy.
-                if (buffer.remaining() >= width * height * 4) {
-                    targetBitmap.copyPixelsFromBuffer(buffer);
-                }
+            ImageProxy.PlaneProxy[] planes = image.getPlanes();
+            if (planes == null || planes.length == 0) {
+                image.close();
+                return;
             }
             
+            ByteBuffer buffer = planes[0].getBuffer();
+            buffer.rewind();
+            
+            // Verify buffer size
+            if (buffer.remaining() < width * height * 4) {
+                 // Buffer too small for RGBA
+                 image.close();
+                 return;
+            }
+            
+            targetBitmap.copyPixelsFromBuffer(buffer);
             image.close();
 
             // Apply Native Java Filters with REUSABLE buffer
@@ -293,7 +318,7 @@ public class MainActivity extends AppCompatActivity {
 
             final Bitmap finalBitmap = targetBitmap;
             runOnUiThread(() -> {
-                if (!isFrozen && finalBitmap != null) {
+                if (!isDestroyed() && !isFinishing() && !isFrozen && finalBitmap != null) {
                     ivPreviewOverlay.setImageBitmap(finalBitmap);
                     
                     // Handle Rotation via View Transform
@@ -325,20 +350,22 @@ public class MainActivity extends AppCompatActivity {
         performHaptic();
         
         // Shutter Animation
-        vShutterFlash.setVisibility(View.VISIBLE);
-        vShutterFlash.setAlpha(1f);
-        vShutterFlash.animate().alpha(0f).setDuration(150).setListener(new AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                vShutterFlash.setVisibility(View.GONE);
-            }
-        }).start();
+        if (vShutterFlash != null) {
+            vShutterFlash.setVisibility(View.VISIBLE);
+            vShutterFlash.setAlpha(1f);
+            vShutterFlash.animate().alpha(0f).setDuration(150).setListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    vShutterFlash.setVisibility(View.GONE);
+                }
+            }).start();
+        }
         
         // Capture Config
-        int[] lutRGB = curveView.getLutRGB();
-        int[] lutR = curveView.getLutR();
-        int[] lutG = curveView.getLutG();
-        int[] lutB = curveView.getLutB();
+        int[] lutRGB = curveView != null ? curveView.getLutRGB() : null;
+        int[] lutR = curveView != null ? curveView.getLutR() : null;
+        int[] lutG = curveView != null ? curveView.getLutG() : null;
+        int[] lutB = curveView != null ? curveView.getLutB() : null;
         boolean crop = (aspectRatioMode == 2);
         float sat = currentSaturation;
         ImageUtils.FilterType filter = currentFilter;
@@ -366,8 +393,10 @@ public class MainActivity extends AppCompatActivity {
                             // 4. Update UI
                             if (savedUri != null) {
                                 runOnUiThread(() -> {
-                                    ivLastImage.setImageBitmap(processed);
-                                    Toast.makeText(MainActivity.this, "Saved to Gallery", Toast.LENGTH_SHORT).show();
+                                    if (!isDestroyed()) {
+                                        ivLastImage.setImageBitmap(processed);
+                                        Toast.makeText(MainActivity.this, "Saved to Gallery", Toast.LENGTH_SHORT).show();
+                                    }
                                 });
                             }
                         }
@@ -378,13 +407,12 @@ public class MainActivity extends AppCompatActivity {
             }
             @Override
             public void onError(@NonNull ImageCaptureException exception) {
-                Toast.makeText(MainActivity.this, "Capture Failed", Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "Capture Failed: " + exception.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
     }
 
     // ... (Standard boilerplates for Permissions, Location, Setup below) ...
-    // Keeping existing helper methods but ensuring they are robust
 
     private void triggerPreviewUpdate() {
         if (isFrozen && frozenBitmap != null) {
@@ -542,6 +570,7 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void captureCurrentStateToPreset(ImageUtils.CurvePreset preset) {
+        if (curveView == null) return;
         preset.rgb = curveView.getPoints(CurveView.Channel.RGB);
         preset.r = curveView.getPoints(CurveView.Channel.RED);
         preset.g = curveView.getPoints(CurveView.Channel.GREEN);
@@ -613,7 +642,9 @@ public class MainActivity extends AppCompatActivity {
              Bitmap temp = frozenBitmap.copy(Bitmap.Config.ARGB_8888, true);
              ImageUtils.applyPreviewEffects(temp, null, currentFilter, currentSaturation, 
                 curveView.getLutRGB(), curveView.getLutR(), curveView.getLutG(), curveView.getLutB());
-             runOnUiThread(() -> ivPreviewOverlay.setImageBitmap(temp));
+             runOnUiThread(() -> {
+                 if (!isDestroyed()) ivPreviewOverlay.setImageBitmap(temp);
+             });
         });
     }
     
@@ -855,6 +886,9 @@ public class MainActivity extends AppCompatActivity {
              permissions.add(Manifest.permission.READ_MEDIA_IMAGES);
         } else {
              permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Vibrate permission is normal, doesn't need runtime request usually but good to check context
         }
         ActivityCompat.requestPermissions(this, permissions.toArray(new String[0]), 10);
     }
