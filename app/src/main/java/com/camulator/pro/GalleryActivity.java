@@ -138,11 +138,8 @@ public class GalleryActivity extends AppCompatActivity {
         @NonNull
         @Override
         public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            ImageView iv = new ImageView(parent.getContext());
-            // Square logic is handled by LayoutManager + ScaleType usually, 
-            // but setting height ensures grid structure.
-            // Width match_parent works because it is inside a Grid cell.
-            iv.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 300));
+            SquareImageView iv = new SquareImageView(parent.getContext());
+            iv.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
             iv.setBackgroundColor(0xFF222222); 
             return new ViewHolder(iv);
@@ -151,13 +148,6 @@ public class GalleryActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
             File file = images.get(position);
-            
-            // Adjust height dynamically based on screen width for perfect squares
-            ViewGroup.LayoutParams params = holder.itemView.getLayoutParams();
-            params.height = holder.itemView.getWidth(); 
-            // Note: getWidth might be 0 initially, strictly better to calculate screen width / spanCount
-            // But simple fixed height or square ImageViews are common. 
-            // Let's rely on onBind for cleaner loads.
             
             Glide.with(holder.itemView)
                  .load(file)
@@ -181,6 +171,17 @@ public class GalleryActivity extends AppCompatActivity {
             public ViewHolder(@NonNull View itemView) {
                 super(itemView);
             }
+        }
+    }
+    
+    // Simple helper view for square grid items
+    private class SquareImageView extends androidx.appcompat.widget.AppCompatImageView {
+        public SquareImageView(android.content.Context context) {
+            super(context);
+        }
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            super.onMeasure(widthMeasureSpec, widthMeasureSpec); // Height = Width
         }
     }
     
