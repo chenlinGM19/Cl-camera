@@ -734,7 +734,11 @@ public class MainActivity extends AppCompatActivity {
         EditText etText = dialog.findViewById(R.id.etCustomText);
         Switch swTime = dialog.findViewById(R.id.swShowTime);
         Switch swCoords = dialog.findViewById(R.id.swShowCoords);
-        Switch swPlace = dialog.findViewById(R.id.swShowPlace);
+        
+        // New Switches
+        Switch swDistrict = dialog.findViewById(R.id.swShowDistrict);
+        Switch swStreet = dialog.findViewById(R.id.swShowStreet);
+
         RadioGroup rgPos = dialog.findViewById(R.id.rgPosition);
         RadioGroup rgStyle = dialog.findViewById(R.id.rgStyle);
         RadioGroup rgBg = dialog.findViewById(R.id.rgBgColor);
@@ -747,7 +751,10 @@ public class MainActivity extends AppCompatActivity {
             etText.setText(wmConfig.customText);
             swTime.setChecked(wmConfig.showTime);
             swCoords.setChecked(wmConfig.showCoords);
-            swPlace.setChecked(wmConfig.showPlace);
+            
+            // Set State
+            swDistrict.setChecked(wmConfig.showDistrict);
+            swStreet.setChecked(wmConfig.showStreet);
             
             int progress = (int) (wmConfig.watermarkScale * 1000);
             sbSize.setProgress(progress);
@@ -781,7 +788,8 @@ public class MainActivity extends AppCompatActivity {
                 wmConfig.customText = etText.getText().toString();
                 wmConfig.showTime = swTime.isChecked();
                 wmConfig.showCoords = swCoords.isChecked();
-                wmConfig.showPlace = swPlace.isChecked();
+                wmConfig.showDistrict = swDistrict.isChecked();
+                wmConfig.showStreet = swStreet.isChecked();
                 wmConfig.watermarkScale = sbSize.getProgress() / 1000f;
 
                 int posId = rgPos.getCheckedRadioButtonId();
@@ -799,9 +807,9 @@ public class MainActivity extends AppCompatActivity {
                     wmConfig.textColor = Color.BLACK;
                 }
                 
-                if (wmConfig.showPlace && (wmConfig.placeName == null || wmConfig.placeName.isEmpty())) {
-                    updateLocation();
-                }
+                // Trigger update to refresh string with new granularity
+                updateLocation();
+                
                 Toast.makeText(this, "Settings Saved", Toast.LENGTH_SHORT).show();
             });
         }
@@ -907,7 +915,7 @@ public class MainActivity extends AppCompatActivity {
                             List<Address> addresses = geocoder.getFromLocation(location.getLatitude(), location.getLongitude(), 1);
                             if (addresses != null && !addresses.isEmpty()) {
                                 Address addr = addresses.get(0);
-                                wmConfig.placeName = getFormattedPlace(addr);
+                                wmConfig.placeName = getFormattedPlace(addr, wmConfig);
                             }
                         } catch (IOException e) {}
                     });
@@ -916,13 +924,38 @@ public class MainActivity extends AppCompatActivity {
         }
     }
     
-    private String getFormattedPlace(Address addr) {
-        String locality = addr.getLocality();
-        String subAdmin = addr.getSubAdminArea();
-        String country = addr.getCountryName();
-        if (locality != null) return locality + (country != null ? ", " + country : "");
-        if (subAdmin != null) return subAdmin + (country != null ? ", " + country : "");
-        return country != null ? country : "";
+    private String getFormattedPlace(Address addr, ImageUtils.WatermarkConfig config) {
+        StringBuilder sb = new StringBuilder();
+        
+        // Show City/District Level
+        if (config.showDistrict) {
+            if (addr.getLocality() != null) {
+                sb.append(addr.getLocality());
+            }
+            if (addr.getSubLocality() != null) {
+                if (sb.length() > 0) sb.append(" ");
+                sb.append(addr.getSubLocality());
+            } else if (addr.getSubAdminArea() != null) {
+                // If subLocality is null (common in some regions), try subAdminArea (County/District)
+                if (sb.length() > 0) sb.append(" ");
+                sb.append(addr.getSubAdminArea());
+            }
+        }
+        
+        // Show Street Level
+        if (config.showStreet) {
+            if (addr.getThoroughfare() != null) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(addr.getThoroughfare());
+            }
+        }
+        
+        // Fallback: If nothing is selected but country is available, showing something is better than empty
+        if (sb.length() == 0 && addr.getCountryName() != null) {
+            return addr.getCountryName();
+        }
+        
+        return sb.toString();
     }
 
     private boolean isCameraPermissionGranted() { return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED; }

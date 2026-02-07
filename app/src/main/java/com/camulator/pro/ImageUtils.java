@@ -129,7 +129,11 @@ public class ImageUtils {
         
         StringBuilder meta = new StringBuilder();
         if (config.showTime) meta.append(new SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).format(new Date()));
-        if (config.showPlace && config.placeName != null && !config.placeName.isEmpty()) {
+        
+        // Combine Location Logic
+        boolean hasLocation = (config.showDistrict || config.showStreet) && config.placeName != null && !config.placeName.isEmpty();
+        
+        if (hasLocation) {
             if (meta.length() > 0) meta.append(" | ");
             meta.append(config.placeName);
         }
@@ -353,7 +357,11 @@ public class ImageUtils {
         public String customText = "CAMULATOR";
         public boolean showTime = true;
         public boolean showCoords = false;
-        public boolean showPlace = true;
+        
+        // Granular location settings
+        public boolean showDistrict = true; // City/District level
+        public boolean showStreet = false;  // Street/Thoroughfare level
+        
         public String latLng = "";
         public String placeName = "";
         public int position = 0;

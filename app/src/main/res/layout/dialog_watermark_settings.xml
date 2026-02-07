@@ -170,11 +170,29 @@
             android:checked="true"
             android:minHeight="48dp"/>
 
+        <!-- Approximate Location Section -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Approximate Location"
+            android:textColor="#888888"
+            android:textSize="12sp"
+            android:layout_marginTop="8dp"/>
+
         <Switch
-            android:id="@+id/swShowPlace"
+            android:id="@+id/swShowDistrict"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Show Place Name"
+            android:text="Show City/District"
+            android:textColor="#FFFFFF"
+            android:checked="true"
+            android:minHeight="48dp"/>
+
+        <Switch
+            android:id="@+id/swShowStreet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Show Street"
             android:textColor="#FFFFFF"
             android:checked="false"
             android:minHeight="48dp"/>
@@ -220,8 +238,6 @@
                 android:text="Right"
                 android:textColor="#FFFFFF"/>
         </RadioGroup>
-
-        <!-- Removed RadioGroup rgTextSize as size is now controlled by slider -->
 
     </LinearLayout>
 </ScrollView>
