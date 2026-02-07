@@ -1,5 +1,9 @@
 {
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
   "name": "Camera Cl",
-  "description": ""
+  "description": "Professional Camera Application"
 }

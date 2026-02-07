@@ -24,6 +24,7 @@ import android.util.Size;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -110,9 +111,12 @@ public class MainActivity extends AppCompatActivity {
     
     private boolean isFrozen = false;
     private Bitmap frozenBitmap = null;
-    private Bitmap reuseBitmap;
-    private Matrix previewTransformMatrix = new Matrix();
-
+    
+    // Double buffering for rendering to prevent race conditions
+    private Bitmap renderBitmapA;
+    private Bitmap renderBitmapB;
+    private boolean useBufferA = true;
+    
     private ActivityResultLauncher<Intent> exportLauncher;
     private ActivityResultLauncher<Intent> importLauncher;
 
@@ -123,7 +127,10 @@ public class MainActivity extends AppCompatActivity {
         // Immersive Full Screen
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            getWindow().getInsetsController().hide(WindowInsets.Type.statusBars());
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.statusBars());
+            }
         }
         
         setContentView(R.layout.activity_main);
@@ -229,45 +236,63 @@ public class MainActivity extends AppCompatActivity {
 
     // High-performance loop
     private void analyzeImage(@NonNull ImageProxy image) {
-        if (isFrozen) {
-            image.close();
-            return;
-        }
-
-        int rotationDegrees = image.getImageInfo().getRotationDegrees();
-        int width = image.getWidth();
-        int height = image.getHeight();
-        
-        // Re-allocate only if size changes
-        if (reuseBitmap == null || reuseBitmap.getWidth() != width || reuseBitmap.getHeight() != height) {
-            reuseBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        }
-        
-        reuseBitmap.copyPixelsFromBuffer(image.getPlanes()[0].getBuffer());
-        image.close();
-
-        // Apply Native Java Filters (Zero allocation inside logic)
-        ImageUtils.applyPreviewEffects(reuseBitmap, currentFilter, currentSaturation, 
-            curveView.getLutRGB(), curveView.getLutR(), curveView.getLutG(), curveView.getLutB());
-
-        runOnUiThread(() -> {
-            if (!isFrozen) {
-                ivPreviewOverlay.setImageBitmap(reuseBitmap);
-                
-                // Handle Rotation via View Transform (Much faster than rotating bitmap bits)
-                if (ivPreviewOverlay.getRotation() != rotationDegrees) {
-                     ivPreviewOverlay.setRotation(rotationDegrees);
-                }
-                
-                // Scale Adjustment to fill screen properly based on rotation
-                if (rotationDegrees == 90 || rotationDegrees == 270) {
-                     float scale = (float) ivPreviewOverlay.getWidth() / ivPreviewOverlay.getHeight();
-                }
-                
-                if (aspectRatioMode == 2) ivPreviewOverlay.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-                else ivPreviewOverlay.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        try {
+            if (isFrozen) {
+                image.close();
+                return;
             }
-        });
+
+            int width = image.getWidth();
+            int height = image.getHeight();
+            int rotationDegrees = image.getImageInfo().getRotationDegrees();
+            
+            // Double buffering strategy to avoid UI race conditions
+            Bitmap targetBitmap = useBufferA ? renderBitmapA : renderBitmapB;
+            
+            // Re-allocate if size changes or null
+            if (targetBitmap == null || targetBitmap.getWidth() != width || targetBitmap.getHeight() != height) {
+                targetBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                if (useBufferA) renderBitmapA = targetBitmap; else renderBitmapB = targetBitmap;
+            }
+            
+            ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+            buffer.rewind();
+            
+            // Safety check for buffer size
+            if (buffer.remaining() < targetBitmap.getByteCount()) {
+                image.close();
+                return; 
+            }
+            
+            targetBitmap.copyPixelsFromBuffer(buffer);
+            image.close();
+
+            // Apply Native Java Filters (Zero allocation inside logic)
+            ImageUtils.applyPreviewEffects(targetBitmap, currentFilter, currentSaturation, 
+                curveView.getLutRGB(), curveView.getLutR(), curveView.getLutG(), curveView.getLutB());
+
+            final Bitmap finalBitmap = targetBitmap;
+            runOnUiThread(() -> {
+                if (!isFrozen && finalBitmap != null) {
+                    ivPreviewOverlay.setImageBitmap(finalBitmap);
+                    
+                    // Handle Rotation via View Transform (Much faster than rotating bitmap bits)
+                    if (ivPreviewOverlay.getRotation() != rotationDegrees) {
+                         ivPreviewOverlay.setRotation(rotationDegrees);
+                    }
+                    
+                    if (aspectRatioMode == 2) ivPreviewOverlay.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+                    else ivPreviewOverlay.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                }
+            });
+            
+            // Toggle buffer for next frame
+            useBufferA = !useBufferA;
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+            try { image.close(); } catch(Exception ignored) {}
+        }
     }
 
     private void takePhoto() {
@@ -534,11 +559,11 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void enterEditorMode() {
-        // Create a copy of the current preview
-        if (reuseBitmap != null) {
+        Bitmap currentDisplay = useBufferA ? renderBitmapB : renderBitmapA;
+        if (currentDisplay != null) {
             isFrozen = true;
             // Need a clean copy to apply filters onto repeatedly
-            frozenBitmap = reuseBitmap.copy(Bitmap.Config.ARGB_8888, true);
+            frozenBitmap = currentDisplay.copy(Bitmap.Config.ARGB_8888, true);
             presetEditorContainer.setVisibility(View.VISIBLE);
             controlsContainer.setVisibility(View.GONE);
             updateFreezeFrame();
