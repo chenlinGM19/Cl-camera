@@ -20,6 +20,8 @@
         android:supportsRtl="true"
         android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.CamulatorPro"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
         tools:targetApi="31">
         
         <activity

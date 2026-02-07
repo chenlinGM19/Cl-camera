@@ -8,6 +8,7 @@ import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.PointF;
 
+import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -26,11 +27,14 @@ public class ImageUtils {
         HDR, CINEMATIC
     }
 
+    /**
+     * Heavy processing for final capture (High Res)
+     */
     public static Bitmap processImage(Bitmap original, FilterType filterType, float saturationVal,
                                       int[] lutRGB, int[] lutR, int[] lutG, int[] lutB,
                                       WatermarkConfig wmConfig, boolean cropToSquare) {
         
-        // 1. Crop if needed (1:1)
+        // 1. Crop Logic
         Bitmap workingBitmap = original;
         if (cropToSquare) {
             int w = original.getWidth();
@@ -41,48 +45,16 @@ public class ImageUtils {
             workingBitmap = Bitmap.createBitmap(original, x, y, size, size);
         }
 
-        // Ensure mutable
-        Bitmap mutable;
-        if (workingBitmap.isMutable()) {
-            mutable = workingBitmap;
-        } else {
-             mutable = workingBitmap.copy(Bitmap.Config.ARGB_8888, true);
-        }
+        // Make mutable copy
+        Bitmap mutable = workingBitmap.copy(Bitmap.Config.ARGB_8888, true);
         
-        Canvas canvas = new Canvas(mutable);
-        Paint paint = new Paint();
+        // 2. Apply Filters & Curves directly to pixels (CPU intensive but accurate)
+        applyFiltersAndCurves(mutable, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
 
-        // 2. Base Filter + Saturation
-        ColorMatrix cm = getFilterMatrix(filterType);
-        
-        float satScale = 1.0f + (saturationVal / 100f);
-        if (satScale < 0) satScale = 0;
-        
-        ColorMatrix satCm = new ColorMatrix();
-        satCm.setSaturation(satScale);
-        cm.postConcat(satCm);
-        
-        paint.setColorFilter(new ColorMatrixColorFilter(cm));
-        // Draw the filter onto itself. 
-        // Note: Drawing a bitmap onto itself with a ColorFilter in Android Canvas might not work as expected 
-        // if source and destination are the same. Usually better to draw to a temp, but for speed we try:
-        // Actually, we need to apply the ColorMatrix to the pixels.
-        // A simple trick is drawing the bitmap into a new canvas, but we want to avoid alloc.
-        // For correctness:
-        Bitmap filtered = Bitmap.createBitmap(mutable.getWidth(), mutable.getHeight(), Bitmap.Config.ARGB_8888);
-        Canvas c2 = new Canvas(filtered);
-        c2.drawBitmap(mutable, 0, 0, paint);
-        mutable = filtered; // Switch to the filtered one
-
-        // 3. Apply Curves (Bitwise Optimized)
-        if (isCurveActive(lutRGB) || isCurveActive(lutR) || isCurveActive(lutG) || isCurveActive(lutB)) {
-            applyCurvesOptimized(mutable, lutRGB, lutR, lutG, lutB);
-        }
-
-        // 4. Apply Watermark
+        // 3. Apply Watermark (Canvas drawing)
         if (wmConfig.enabled) {
             if (wmConfig.styleFooter) {
-                // FOOTER MODE: Extend image height
+                // Footer logic
                 int footerHeight = (int) (mutable.getHeight() * 0.12f);
                 int newHeight = mutable.getHeight() + footerHeight;
                 Bitmap framed = Bitmap.createBitmap(mutable.getWidth(), newHeight, Bitmap.Config.ARGB_8888);
@@ -92,7 +64,7 @@ public class ImageUtils {
                 drawWatermark(c, mutable.getWidth(), newHeight, wmConfig, mutable.getHeight());
                 return framed;
             } else {
-                // OVERLAY MODE
+                // Overlay logic
                 Canvas c = new Canvas(mutable);
                 drawWatermark(c, mutable.getWidth(), mutable.getHeight(), wmConfig, -1);
             }
@@ -100,39 +72,81 @@ public class ImageUtils {
 
         return mutable;
     }
-    
-    // Optimized for Real-time Loop (Bitwise operations, no Color objects)
-    private static void applyCurvesOptimized(Bitmap bitmap, int[] rgb, int[] r, int[] g, int[] b) {
+
+    /**
+     * FAST processing for Real-time Preview. 
+     * Modifies the bitmap in-place. Assumes bitmap is already mutable.
+     */
+    public static void applyPreviewEffects(Bitmap bitmap, FilterType filterType, float saturationVal,
+                                           int[] lutRGB, int[] lutR, int[] lutG, int[] lutB) {
+        applyFiltersAndCurves(bitmap, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
+    }
+
+    private static void applyFiltersAndCurves(Bitmap bitmap, FilterType filterType, float saturationVal,
+                                              int[] lutRGB, int[] lutR, int[] lutG, int[] lutB) {
         int w = bitmap.getWidth();
         int h = bitmap.getHeight();
         int[] pixels = new int[w * h];
         bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
 
+        // Pre-calculate ColorMatrix array to avoid object creation inside loop
+        float[] colorMatrix = null;
+        if (filterType != FilterType.NONE || saturationVal != 0) {
+            ColorMatrix cm = getFilterMatrix(filterType);
+            if (saturationVal != 0) {
+                float satScale = 1.0f + (saturationVal / 100f);
+                if (satScale < 0) satScale = 0;
+                ColorMatrix satCm = new ColorMatrix();
+                satCm.setSaturation(satScale);
+                cm.postConcat(satCm);
+            }
+            colorMatrix = cm.getArray();
+        }
+
+        // Loop pixels
+        // NOTE: For 12MP images this is slow on Java, but user requested Native Java.
+        // For preview (1080p), this is acceptable ~30-50ms.
+        
+        boolean hasCurves = isCurveActive(lutRGB) || isCurveActive(lutR) || isCurveActive(lutG) || isCurveActive(lutB);
+        boolean hasMatrix = colorMatrix != null;
+
+        if (!hasCurves && !hasMatrix) return;
+
         for (int i = 0; i < pixels.length; i++) {
             int c = pixels[i];
-            int a = c & 0xFF000000; // Keep Alpha
-            int red = (c >> 16) & 0xFF;
-            int green = (c >> 8) & 0xFF;
-            int blue = c & 0xFF;
+            int r = (c >> 16) & 0xFF;
+            int g = (c >> 8) & 0xFF;
+            int b = c & 0xFF;
+            int a = c & 0xFF000000;
 
-            // Apply Master RGB Curve first
-            if (rgb != null) {
-                red = rgb[red];
-                green = rgb[green];
-                blue = rgb[blue];
+            // 1. Apply Color Matrix
+            if (hasMatrix) {
+                float nr = r * colorMatrix[0] + g * colorMatrix[1] + b * colorMatrix[2] + colorMatrix[4];
+                float ng = r * colorMatrix[5] + g * colorMatrix[6] + b * colorMatrix[7] + colorMatrix[9];
+                float nb = r * colorMatrix[10] + g * colorMatrix[11] + b * colorMatrix[12] + colorMatrix[14];
+                
+                // Clamp
+                r = (nr > 255) ? 255 : (nr < 0) ? 0 : (int) nr;
+                g = (ng > 255) ? 255 : (ng < 0) ? 0 : (int) ng;
+                b = (nb > 255) ? 255 : (nb < 0) ? 0 : (int) nb;
             }
 
-            // Apply Individual Channels
-            if (r != null) red = r[red];
-            if (g != null) green = g[green];
-            if (b != null) blue = b[blue];
+            // 2. Apply Curves
+            if (hasCurves) {
+                if (lutRGB != null) { r = lutRGB[r]; g = lutRGB[g]; b = lutRGB[b]; }
+                if (lutR != null) r = lutR[r];
+                if (lutG != null) g = lutG[g];
+                if (lutB != null) b = lutB[b];
+            }
 
-            // Reassemble
-            pixels[i] = a | (red << 16) | (green << 8) | blue;
+            pixels[i] = a | (r << 16) | (g << 8) | b;
         }
+
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h);
     }
     
+    // --- Watermark & Config Logic ---
+
     private static void drawWatermark(Canvas canvas, int w, int h, WatermarkConfig config, int footerTopY) {
         Paint textPaint = new Paint();
         textPaint.setColor(config.textColor);
@@ -143,12 +157,12 @@ public class ImageUtils {
         }
         
         float baseSize = (footerTopY != -1) ? (h - footerTopY) : h;
-        float textSize = baseSize * (config.textSize == 0 ? 0.25f : config.textSize == 1 ? 0.35f : 0.45f);
+        // Text scaling
+        float scaleFactor = (footerTopY != -1) ? 0.35f : 0.035f; // Default Medium
+        if (config.textSize == 0) scaleFactor *= 0.7f;
+        if (config.textSize == 2) scaleFactor *= 1.4f;
         
-        if (footerTopY == -1) {
-            textSize = h * (config.textSize == 0 ? 0.02f : config.textSize == 1 ? 0.03f : 0.045f);
-        }
-        
+        float textSize = baseSize * scaleFactor;
         textPaint.setTextSize(textSize);
 
         int padding = (int) (w * 0.04f);
@@ -174,33 +188,43 @@ public class ImageUtils {
 
         float currentY;
         if (footerTopY != -1) {
+            // Footer Center Logic
             float footerH = h - footerTopY;
-            float totalTextH = textSize; 
-            if (!secondaryText.isEmpty()) totalTextH += textSize * 1.2f;
-            currentY = footerTopY + (footerH - totalTextH) / 2 + textSize * 0.8f; 
+            float totalH = textSize;
+            if (!secondaryText.isEmpty()) totalH += textSize * 1.3f;
+            currentY = footerTopY + (footerH - totalH) / 2 + textSize * 0.8f; 
         } else {
-            int bottomMargin = (int) (h * 0.04f);
-            float totalTextH = textSize;
-            if (!secondaryText.isEmpty()) totalTextH += textSize * 1.2f;
-            currentY = h - bottomMargin - totalTextH + textSize; 
+            // Overlay Logic
+            int bottomMargin = (int) (h * 0.05f);
+            float totalH = textSize;
+            if (!secondaryText.isEmpty()) totalH += textSize * 1.3f;
+            currentY = h - bottomMargin - totalH + textSize; 
         }
 
-        float startX = padding;
+        float startX;
+        // Draw Primary
         if (!primaryText.isEmpty()) {
             textPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            if (config.position == 1) startX = (w - textPaint.measureText(primaryText)) / 2;
-            else if (config.position == 2) startX = w - padding - textPaint.measureText(primaryText);
+            float txtW = textPaint.measureText(primaryText);
+            
+            if (config.position == 1) startX = (w - txtW) / 2;
+            else if (config.position == 2) startX = w - padding - txtW;
             else startX = padding;
+            
             canvas.drawText(primaryText, startX, currentY, textPaint);
-            currentY += textSize * 1.2f;
+            currentY += textSize * 1.3f;
         }
 
+        // Draw Secondary
         if (!secondaryText.isEmpty()) {
             textPaint.setTextSize(textSize * 0.75f);
             textPaint.setTypeface(android.graphics.Typeface.MONOSPACE);
-            if (config.position == 1) startX = (w - textPaint.measureText(secondaryText)) / 2;
-            else if (config.position == 2) startX = w - padding - textPaint.measureText(secondaryText);
+             float txtW = textPaint.measureText(secondaryText);
+            
+            if (config.position == 1) startX = (w - txtW) / 2;
+            else if (config.position == 2) startX = w - padding - txtW;
             else startX = padding;
+            
             canvas.drawText(secondaryText, startX, currentY, textPaint);
         }
     }
@@ -212,16 +236,19 @@ public class ImageUtils {
     private static ColorMatrix getFilterMatrix(FilterType type) {
         ColorMatrix cm = new ColorMatrix();
         switch (type) {
-            case VIVID: cm.setSaturation(1.3f); break;
+            case VIVID: cm.setSaturation(1.4f); break;
             case MATTE: 
-                cm.set(new float[] { 1,0,0,0,20, 0,1,0,0,20, 0,0,1,0,20, 0,0,0,1,0 });
+                cm.set(new float[] { 1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0 }); // Reset base
+                // Lift blacks logic would require contrast adjustment
+                cm.setSaturation(0.9f);
                 break;
             case B_W: cm.setSaturation(0); break;
             case SEPIA:
                 cm.set(new float[] { 0.393f, 0.769f, 0.189f, 0, 0, 0.349f, 0.686f, 0.168f, 0, 0, 0.272f, 0.534f, 0.131f, 0, 0, 0, 0, 0, 1, 0 });
                 break;
             case CYBERPUNK:
-                cm.set(new float[] { 1.2f, 0, 0, 0, 10, 0, 0.9f, 0, 0, 0, 0, 0, 1.4f, 0, 30, 0, 0, 0, 1, 0 });
+                // Boost Magentas and Cyans
+                cm.set(new float[] { 1.2f,0,0,0,0, 0,0.9f,0,0,0, 0,0,1.4f,0,0, 0,0,0,1,0 });
                 break;
             case WARM: cm.setScale(1.1f, 1.05f, 0.9f, 1); break;
             case COOL: cm.setScale(0.9f, 1.0f, 1.15f, 1); break;
@@ -229,24 +256,23 @@ public class ImageUtils {
                  cm.set(new float[] { 1.1f,0,0,0,0, 0,1.05f,0,0,0, 0,0,0.9f,0,0, 0,0,0,1,0 });
                 break;
             case LEICA_M:
-                ColorMatrix bw = new ColorMatrix(); bw.setSaturation(0);
-                ColorMatrix contrast = new ColorMatrix();
-                float scale = 1.3f; float translate = (-.5f * scale + .5f) * 255.f;
-                contrast.set(new float[] { scale, 0, 0, 0, translate, 0, scale, 0, 0, translate, 0, 0, scale, 0, translate, 0, 0, 0, 1, 0 });
-                cm.setConcat(contrast, bw);
+                // High contrast BW
+                 cm.setSaturation(0);
+                 ColorMatrix c = new ColorMatrix();
+                 c.set(new float[] { 1.4f,0,0,0,-30, 0,1.4f,0,0,-30, 0,0,1.4f,0,-30, 0,0,0,1,0 });
+                 cm.postConcat(c);
                 break;
             case FUJI_SUPERIA:
-                 cm.set(new float[] { 1.05f, -0.05f, 0.1f, 0, 0, 0, 1.05f, 0, 0, 0, -0.05f, 0, 1.1f, 0, 0, 0, 0, 0, 1, 0 });
+                 cm.set(new float[] { 1.05f, -0.1f, 0, 0, 0, 0, 1.05f, 0, 0, 0, 0, 0, 1.1f, 0, 0, 0, 0, 0, 1, 0 });
                 break;
             case TEAL_ORANGE:
-                cm.set(new float[] { 1.2f, -0.1f, 0, 0, 0, -0.05f, 1.0f, -0.05f, 0, 0, 0, -0.2f, 1.4f, 0, 0, 0, 0, 0, 1, 0 });
+                cm.set(new float[] { 1.1f,0,0,0,0, 0,1.0f,0,0,0, 0,0,0.8f,0,0, 0,0,0,1,0 });
                 break;
             default: break;
         }
         return cm;
     }
-    
-    // XMP and Config classes remain unchanged for brevity, but are included in compilation
+
     public static class CurvePreset {
         public String name = "New Preset";
         public List<PointF> rgb = new ArrayList<>();
@@ -259,16 +285,19 @@ public class ImageUtils {
             rgb = defaultPoints(); r = defaultPoints(); g = defaultPoints(); b = defaultPoints(); saturation = 0f;
         }
         private List<PointF> defaultPoints() { List<PointF> p = new ArrayList<>(); p.add(new PointF(0f, 1f)); p.add(new PointF(1f, 0f)); return p; }
+        
         public static CurvePreset fromXmp(String xmpContent) {
             CurvePreset preset = new CurvePreset();
-            Matcher nameMatcher = Pattern.compile("<crs:Name>\\s*<rdf:Alt>\\s*<rdf:li[^>]*>(.*?)</rdf:li>", Pattern.DOTALL).matcher(xmpContent);
-            if (nameMatcher.find()) preset.name = nameMatcher.group(1).trim();
-            Matcher satMatcher = Pattern.compile("crs:Saturation=\"([^\"]+)\"").matcher(xmpContent);
-            if (satMatcher.find()) { try { preset.saturation = Float.parseFloat(satMatcher.group(1)); } catch (Exception e) {} }
-            preset.rgb = parseXmpPoints(xmpContent, "ToneCurvePV2012");
-            preset.r = parseXmpPoints(xmpContent, "ToneCurvePV2012Red");
-            preset.g = parseXmpPoints(xmpContent, "ToneCurvePV2012Green");
-            preset.b = parseXmpPoints(xmpContent, "ToneCurvePV2012Blue");
+            try {
+                Matcher nameMatcher = Pattern.compile("<crs:Name>\\s*<rdf:Alt>\\s*<rdf:li[^>]*>(.*?)</rdf:li>", Pattern.DOTALL).matcher(xmpContent);
+                if (nameMatcher.find()) preset.name = nameMatcher.group(1).trim();
+                Matcher satMatcher = Pattern.compile("crs:Saturation=\"([^\"]+)\"").matcher(xmpContent);
+                if (satMatcher.find()) { preset.saturation = Float.parseFloat(satMatcher.group(1)); }
+                preset.rgb = parseXmpPoints(xmpContent, "ToneCurvePV2012");
+                preset.r = parseXmpPoints(xmpContent, "ToneCurvePV2012Red");
+                preset.g = parseXmpPoints(xmpContent, "ToneCurvePV2012Green");
+                preset.b = parseXmpPoints(xmpContent, "ToneCurvePV2012Blue");
+            } catch (Exception e) {}
             return preset;
         }
         private static List<PointF> parseXmpPoints(String content, String tagName) {
@@ -286,7 +315,7 @@ public class ImageUtils {
                          points.add(new PointF(x, 1.0f - y)); 
                      }
                  }
-             } catch (Exception e) { e.printStackTrace(); }
+             } catch (Exception e) {}
              if (points.isEmpty()) { points.add(new PointF(0f, 1f)); points.add(new PointF(1f, 0f)); }
              return points;
         }
