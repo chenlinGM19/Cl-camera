@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.location.Location;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -40,7 +41,10 @@ import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -63,12 +67,6 @@ public class MainActivity extends AppCompatActivity {
     // UI State
     private boolean isMenuOpen = false;
 
-    private static final String[] REQUIRED_PERMISSIONS = {
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-    };
     private static final int REQUEST_CODE_PERMISSIONS = 10;
 
     @Override
@@ -83,11 +81,25 @@ public class MainActivity extends AppCompatActivity {
         if (allPermissionsGranted()) {
             startCamera();
         } else {
-            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
+            ActivityCompat.requestPermissions(this, getRequiredPermissions(), REQUEST_CODE_PERMISSIONS);
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor();
         setupUI();
+    }
+
+    private String[] getRequiredPermissions() {
+        List<String> permissions = new ArrayList<>();
+        permissions.add(Manifest.permission.CAMERA);
+        permissions.add(Manifest.permission.RECORD_AUDIO);
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        
+        // WRITE_EXTERNAL_STORAGE is only needed on <= API 28.
+        // On API 29+, scoped storage is used, and getExternalFilesDir doesn't need permission.
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        return permissions.toArray(new String[0]);
     }
 
     private void hideSystemUI() {
@@ -252,7 +264,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean allPermissionsGranted() {
-        for (String permission : REQUIRED_PERMISSIONS) {
+        for (String permission : getRequiredPermissions()) {
             if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
                 return false;
             }
