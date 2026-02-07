@@ -15,7 +15,11 @@ import android.provider.MediaStore;
 import android.util.SizeF;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.Switch;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -36,6 +40,7 @@ import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationServices;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.OutputStream;
@@ -133,11 +138,50 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         
-        findViewById(R.id.btnWatermark).setOnClickListener(v -> {
-            wmConfig.textSize = (wmConfig.textSize + 1) % 3;
-            String sizeLabel = wmConfig.textSize == 0 ? "S" : wmConfig.textSize == 1 ? "M" : "L";
-            Toast.makeText(this, "WM Size: " + sizeLabel, Toast.LENGTH_SHORT).show();
-        });
+        findViewById(R.id.btnWatermark).setOnClickListener(v -> showWatermarkSettingsDialog());
+    }
+
+    private void showWatermarkSettingsDialog() {
+        BottomSheetDialog dialog = new BottomSheetDialog(this);
+        dialog.setContentView(R.layout.dialog_watermark_settings);
+
+        Switch swEnabled = dialog.findViewById(R.id.swWatermarkEnabled);
+        Switch swLogo = dialog.findViewById(R.id.swShowLogo);
+        EditText etText = dialog.findViewById(R.id.etCustomText);
+        Switch swTime = dialog.findViewById(R.id.swShowTime);
+        Switch swCoords = dialog.findViewById(R.id.swShowCoords);
+        RadioGroup rgSize = dialog.findViewById(R.id.rgTextSize);
+
+        if (swEnabled != null && swLogo != null && etText != null && swTime != null && swCoords != null && rgSize != null) {
+            swEnabled.setChecked(wmConfig.enabled);
+            swLogo.setChecked(wmConfig.showLogo);
+            etText.setText(wmConfig.customText);
+            swTime.setChecked(wmConfig.showTime);
+            swCoords.setChecked(wmConfig.showCoords);
+
+            switch (wmConfig.textSize) {
+                case 0: rgSize.check(R.id.rbSmall); break;
+                case 1: rgSize.check(R.id.rbMedium); break;
+                case 2: rgSize.check(R.id.rbLarge); break;
+            }
+
+            dialog.setOnDismissListener(d -> {
+                wmConfig.enabled = swEnabled.isChecked();
+                wmConfig.showLogo = swLogo.isChecked();
+                wmConfig.customText = etText.getText().toString();
+                wmConfig.showTime = swTime.isChecked();
+                wmConfig.showCoords = swCoords.isChecked();
+
+                int selectedId = rgSize.getCheckedRadioButtonId();
+                if (selectedId == R.id.rbSmall) wmConfig.textSize = 0;
+                else if (selectedId == R.id.rbMedium) wmConfig.textSize = 1;
+                else if (selectedId == R.id.rbLarge) wmConfig.textSize = 2;
+                
+                Toast.makeText(this, "Watermark settings saved", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        dialog.show();
     }
 
     private void setupFocalLengthButtons() {
@@ -252,10 +296,6 @@ public class MainActivity extends AppCompatActivity {
                 
                 // 4. Calculate Equivalent Focal Length
                 baseEquivalentFocalLength = focalLengths[0] * cropFactor;
-                
-                // Debug toast
-                // String msg = String.format(Locale.US, "Base: %.1fmm (Phy: %.1fmm)", baseEquivalentFocalLength, focalLengths[0]);
-                // Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
             }
         } catch (Exception e) {
             // Fallback to 24mm if Camera2 info is inaccessible
@@ -272,8 +312,12 @@ public class MainActivity extends AppCompatActivity {
             public void onCaptureSuccess(@NonNull ImageProxy image) {
                 Bitmap bitmap = imageProxyToBitmap(image);
                 image.close();
-                Bitmap processed = ImageUtils.processImage(bitmap, currentFilter, curveView.getPoints(), wmConfig);
-                saveImage(processed);
+                // Process in background to avoid blocking UI
+                cameraExecutor.execute(() -> {
+                    Bitmap processed = ImageUtils.processImage(bitmap, currentFilter, curveView.getPoints(), wmConfig);
+                    saveImage(processed);
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Saved to Gallery", Toast.LENGTH_SHORT).show());
+                });
             }
 
             @Override
@@ -296,7 +340,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void saveImage(Bitmap bitmap) {
         ContentValues contentValues = new ContentValues();
-        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, "CAM_" + System.currentTimeMillis());
+        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, "CAM_" + System.currentTimeMillis() + ".jpg");
         contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
         if(Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
             contentValues.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Camulator");
@@ -307,10 +351,10 @@ public class MainActivity extends AppCompatActivity {
                     getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
             );
             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream);
-            stream.close();
-            Toast.makeText(this, "Saved to Gallery", Toast.LENGTH_SHORT).show();
+            if (stream != null) stream.close();
         } catch (Exception e) {
             e.printStackTrace();
+            runOnUiThread(() -> Toast.makeText(this, "Error Saving Image", Toast.LENGTH_SHORT).show());
         }
     }
     
