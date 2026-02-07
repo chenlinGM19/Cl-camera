@@ -1,9 +1,9 @@
 {
+  "name": "Camulator Pro",
+  "description": "Professional Camera App with Curves, Color Grading, and Smart Watermarks.",
   "requestFramePermissions": [
     "camera",
     "microphone",
     "geolocation"
-  ],
-  "name": "Camera Cl",
-  "description": "Professional Camera Application"
+  ]
 }

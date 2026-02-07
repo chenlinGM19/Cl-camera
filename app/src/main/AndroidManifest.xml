@@ -4,25 +4,20 @@
 
     <uses-feature android:name="android.hardware.camera.any" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" tools:ignore="ScopedStorage" />
 
     <application
         android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
-        android:label="Camulator Pro"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.CamulatorPro"
-        android:hardwareAccelerated="true"
-        android:largeHeap="true"
         tools:targetApi="31">
         
         <activity
@@ -36,16 +31,7 @@
             </intent-filter>
         </activity>
 
-        <activity 
-            android:name=".GalleryActivity"
-            android:screenOrientation="portrait"
-            android:label="Gallery"/>
-            
-        <activity 
-            android:name=".ImageViewerActivity"
-            android:theme="@style/Theme.CamulatorPro.Fullscreen"
-            android:screenOrientation="portrait"/>
-            
+        <activity android:name=".GalleryActivity" android:theme="@style/Theme.CamulatorPro.Fullscreen"/>
     </application>
 
 </manifest>

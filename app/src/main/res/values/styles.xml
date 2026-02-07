@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
+<resources>
     <style name="Theme.CamulatorPro" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#1C1C1E</item>
-        <item name="colorPrimaryVariant">#000000</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorSecondary">#FFD700</item>
-        <item name="colorOnSecondary">#000000</item>
+        <item name="colorPrimary">#FF9800</item>
+        <item name="colorPrimaryVariant">#F57C00</item>
+        <item name="colorOnPrimary">#000000</item>
         <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
     </style>
-    
+
     <style name="Theme.CamulatorPro.Fullscreen" parent="Theme.CamulatorPro">
+        <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentOverlay">@null</item>
     </style>
