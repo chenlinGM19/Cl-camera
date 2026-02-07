@@ -49,10 +49,7 @@ import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
-import androidx.camera.core.ResolutionSelector;
 import androidx.camera.core.ZoomState;
-import androidx.camera.core.resolutionselector.AspectRatioStrategy;
-import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
@@ -198,15 +195,13 @@ public class MainActivity extends AppCompatActivity {
                         .build();
                 preview.setSurfaceProvider(viewFinder.getSurfaceProvider());
 
-                // 2. ImageAnalysis (OPTIMIZED)
-                // Limit resolution to 720p (approx) for stable 30FPS filtering on mid-range devices
-                ResolutionSelector resolutionSelector = new ResolutionSelector.Builder()
-                        .setAspectRatioStrategy(targetRatio == AspectRatio.RATIO_16_9 ? AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY : AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
-                        .setResolutionStrategy(new ResolutionStrategy(new Size(720, 1280), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER))
-                        .build();
-
+                // 2. ImageAnalysis (Compat API)
+                // Use setTargetResolution instead of ResolutionSelector to avoid build issues
+                // 720p is good for performance
+                Size targetSize = (targetRatio == AspectRatio.RATIO_16_9) ? new Size(720, 1280) : new Size(720, 960);
+                
                 imageAnalysis = new ImageAnalysis.Builder()
-                        .setResolutionSelector(resolutionSelector)
+                        .setTargetResolution(targetSize)
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                         .build();
@@ -267,9 +262,6 @@ public class MainActivity extends AppCompatActivity {
                 // Scale Adjustment to fill screen properly based on rotation
                 if (rotationDegrees == 90 || rotationDegrees == 270) {
                      float scale = (float) ivPreviewOverlay.getWidth() / ivPreviewOverlay.getHeight();
-                     // Simple check: if view is portrait but image is landscape rotated, we might need to scale up
-                     // CameraX previewView handles this complex logic, but for overlay we keep it simple:
-                     // centerCrop typically handles filling.
                 }
                 
                 if (aspectRatioMode == 2) ivPreviewOverlay.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
