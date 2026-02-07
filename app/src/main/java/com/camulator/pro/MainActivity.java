@@ -169,6 +169,13 @@ public class MainActivity extends AppCompatActivity {
         editor.putInt("height_progress", binding.seekHeight.getProgress());
         editor.putInt("aspect_ratio_mode", currentAspectRatioMode);
         
+        // Watermark flags
+        editor.putBoolean("wm_logo", binding.swLogo.isChecked());
+        editor.putBoolean("wm_date", binding.swDate.isChecked());
+        editor.putBoolean("wm_gps", binding.swGPS.isChecked());
+        editor.putBoolean("wm_city", binding.cbCity.isChecked());
+        editor.putBoolean("wm_street", binding.cbStreet.isChecked());
+        
         // Save simple edit params
         editor.putInt("p_high", editParams.highlights);
         editor.putInt("p_shad", editParams.shadows);
@@ -193,6 +200,13 @@ public class MainActivity extends AppCompatActivity {
 
         currentAspectRatioMode = prefs.getInt("aspect_ratio_mode", AR_4_3);
         
+        // Watermark Flags
+        binding.swLogo.setChecked(prefs.getBoolean("wm_logo", true));
+        binding.swDate.setChecked(prefs.getBoolean("wm_date", true));
+        binding.swGPS.setChecked(prefs.getBoolean("wm_gps", true));
+        binding.cbCity.setChecked(prefs.getBoolean("wm_city", true));
+        binding.cbStreet.setChecked(prefs.getBoolean("wm_street", false));
+
         // Load params
         editParams.highlights = prefs.getInt("p_high", 0);
         editParams.shadows = prefs.getInt("p_shad", 0);
@@ -226,16 +240,19 @@ public class MainActivity extends AppCompatActivity {
         binding.btnAspectRatio.setOnClickListener(v -> toggleAspectRatio());
         binding.btnEdit.setOnClickListener(v -> toggleEditPanel());
         
-        // EV Slider
+        // EV Slider: -10 to +10 range
         binding.evSlider.addOnChangeListener((slider, value, fromUser) -> {
             if (camera != null) {
                 CameraControl control = camera.getCameraControl();
-                // Map slider value (-4 to 4) to Exposure Index.
-                // Usually steps are 1/3 EV. If range is +/- 4 EV, that's many steps.
-                // CameraX index is integer steps.
-                // We'll multiply by 3 assuming 1/3 steps, check range later.
-                int index = (int) (value * 3); 
-                control.setExposureCompensationIndex(index);
+                // Map integer steps directly
+                int index = (int) value;
+                
+                // Ensure we respect hardware limits
+                ExposureState state = camera.getCameraInfo().getExposureState();
+                Range<Integer> range = state.getExposureCompensationRange();
+                if (range.contains(index)) {
+                     control.setExposureCompensationIndex(index);
+                }
             }
         });
     }
@@ -285,6 +302,12 @@ public class MainActivity extends AppCompatActivity {
         binding.channelR.setOnClickListener(channelListener);
         binding.channelG.setOnClickListener(channelListener);
         binding.channelB.setOnClickListener(channelListener);
+        
+        // Curve change listener
+        binding.curveView.setOnCurveChangeListener(() -> {
+            // Real-time update logic here if we had a filter pipeline
+            // For now, we update state for capture
+        });
         
         // Light Sliders
         SeekBar.OnSeekBarChangeListener lightListener = new SeekBar.OnSeekBarChangeListener() {
@@ -410,6 +433,9 @@ public class MainActivity extends AppCompatActivity {
     private void toggleEditPanel() {
         isMenuOpen = !isMenuOpen;
         binding.layoutEditor.setVisibility(isMenuOpen ? View.VISIBLE : View.GONE);
+        if(!isMenuOpen) {
+            saveSettings();
+        }
     }
 
     private void startCamera() {
@@ -443,6 +469,7 @@ public class MainActivity extends AppCompatActivity {
                 
         imageAnalysis.setAnalyzer(cameraExecutor, image -> {
             long currentTime = System.currentTimeMillis();
+            // Calculate histogram if editor is open
             if (binding.layoutEditor.getVisibility() == View.VISIBLE && 
                (currentTime - lastHistogramUpdate > HISTOGRAM_UPDATE_INTERVAL_MS)) {
                 int[] histogram = ImageProcessor.calculateLuminanceHistogram(image.getPlanes()[0].getBuffer(), image.getPlanes()[0].getPixelStride());
@@ -469,9 +496,13 @@ public class MainActivity extends AppCompatActivity {
                 updateFocalLengthVisibility(binding.focal85mm, 3.5f);
             });
             
-            // Setup EV Slider Range
+            // Setup EV Slider Range from Hardware
             ExposureState exposureState = camera.getCameraInfo().getExposureState();
             Range<Integer> range = exposureState.getExposureCompensationRange();
+            // User requested -10 to +10. We check overlap with hardware range.
+            // We set slider bounds to user request, but clamp usage.
+            // Ideally we should sync slider bounds to hardware if hardware range is small.
+            // But let's stick to user request visual range.
             
         } catch (Exception exc) {
             Toast.makeText(this, "Camera init failed", Toast.LENGTH_SHORT).show();
@@ -500,6 +531,13 @@ public class MainActivity extends AppCompatActivity {
         wmConfig.isWhiteBg = binding.toggleBgColor.isChecked();
         wmConfig.align = currentAlign;
         wmConfig.customText = binding.etWatermarkText.getText().toString();
+        
+        // New Flag Configs
+        wmConfig.showLogo = binding.swLogo.isChecked();
+        wmConfig.showDate = binding.swDate.isChecked();
+        wmConfig.showGPS = binding.swGPS.isChecked();
+        wmConfig.showCity = binding.cbCity.isChecked();
+        wmConfig.showStreet = binding.cbStreet.isChecked();
         
         float progress = binding.seekHeight.getProgress(); 
         wmConfig.heightPercent = progress / 1000f; // 0 to 10%
@@ -576,16 +614,48 @@ public class MainActivity extends AppCompatActivity {
             }
 
             // Exif Metadata Construction
-            StringBuilder exifBuilder = new StringBuilder();
-            // ... (Simplified for brevity, same as previous) ...
-            config.exifInfo = "ISO" + exif.getAttribute(ExifInterface.TAG_ISO);
+            config.exifInfo = "ISO" + (exif.getAttribute(ExifInterface.TAG_ISO) != null ? exif.getAttribute(ExifInterface.TAG_ISO) : "-");
+            String f = exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH);
+            if(f!=null) {
+                 try {
+                     double fl = Double.parseDouble(f);
+                     config.exifInfo += "  " + new DecimalFormat("#").format(fl) + "mm";
+                 } catch(Exception e){}
+            }
         } catch (IOException e) { }
 
-        // --- NEW PROCESSING CALL ---
+        // Apply Image Processing
         bitmap = ImageProcessor.applyProcessing(bitmap, curveData, params);
 
-        config.dateStr = new SimpleDateFormat("yyyy/MM/dd", Locale.US).format(new Date());
-        config.locStr = ""; // Simplified logic
+        config.dateStr = new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(new Date());
+        
+        // Location Geocoding
+        if (location != null) {
+            double lat = location.getLatitude();
+            double lon = location.getLongitude();
+            String latStr = String.format(Locale.US, "%.4f %s", Math.abs(lat), lat >= 0 ? "N" : "S");
+            String lonStr = String.format(Locale.US, "%.4f %s", Math.abs(lon), lon >= 0 ? "E" : "W");
+            config.gpsStr = latStr + " " + lonStr;
+
+            try {
+                Geocoder geocoder = new Geocoder(this, Locale.getDefault());
+                List<Address> addresses = geocoder.getFromLocation(lat, lon, 1);
+                if (addresses != null && !addresses.isEmpty()) {
+                    Address addr = addresses.get(0);
+                    // Use subAdminArea for District/City-like, Locality for City
+                    String city = addr.getSubAdminArea();
+                    if (city == null) city = addr.getLocality();
+                    
+                    String street = addr.getThoroughfare(); 
+                    if (street == null) street = addr.getFeatureName(); // Fallback
+                    
+                    config.locStr = (city != null ? city : "") + "|" + (street != null ? street : "");
+                }
+            } catch (Exception e) {}
+        } else {
+            config.gpsStr = "";
+            config.locStr = "";
+        }
         
         Bitmap finalBitmap = WatermarkUtil.addWatermark(bitmap, config);
         if (bitmap != finalBitmap && !bitmap.isRecycled()) bitmap.recycle();

@@ -122,7 +122,10 @@ public class CurveView extends View {
                 return true;
             }
             @Override
-            public boolean onDown(MotionEvent e) { return true; }
+            public boolean onDown(MotionEvent e) { 
+                // Don't consume here to allow manual touch handling in onTouchEvent
+                return true; 
+            }
         });
     }
 
@@ -292,7 +295,9 @@ public class CurveView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (gestureDetector.onTouchEvent(event)) return true;
+        // Pass to detector first, but do NOT return immediately if it returns true.
+        // We need to allow the move/up logic to run unless it was a double tap.
+        gestureDetector.onTouchEvent(event);
         
         float x = event.getX();
         float y = event.getY();
@@ -321,6 +326,7 @@ public class CurveView extends View {
                         sortPoints(points);
                         activePointIndex = points.indexOf(newPoint);
                         invalidate();
+                        if (listener != null) listener.onChange();
                     }
                 }
                 getParent().requestDisallowInterceptTouchEvent(true);
@@ -338,11 +344,12 @@ public class CurveView extends View {
                     }
                     p.y = ny;
                     invalidate();
+                    if (listener != null) listener.onChange();
                 }
                 break;
             case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
                 activePointIndex = -1;
-                if (listener != null) listener.onChange();
                 getParent().requestDisallowInterceptTouchEvent(false);
                 break;
         }

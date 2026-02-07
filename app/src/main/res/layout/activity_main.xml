@@ -16,40 +16,6 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent" />
 
-    <!-- EV Slider (Exposure Compensation) -->
-    <LinearLayout
-        android:layout_width="40dp"
-        android:layout_height="200dp"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="#40000000"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/topBar"
-        android:layout_marginTop="20dp"
-        android:layout_marginEnd="10dp">
-        
-        <TextView 
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="EV" 
-            android:textColor="#FFF" 
-            android:textSize="10sp"/>
-            
-        <com.google.android.material.slider.Slider
-            android:id="@+id/evSlider"
-            android:layout_width="wrap_content"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:valueFrom="-4.0"
-            android:valueTo="4.0"
-            android:stepSize="1.0"
-            android:value="0.0"
-            app:thumbColor="#FF9800"
-            app:trackColorActive="#FF9800"
-            app:trackColorInactive="#888888"
-            android:rotation="270"/>
-    </LinearLayout>
-
     <!-- Shutter Blackout Overlay -->
     <View
         android:id="@+id/shutterOverlay"
@@ -109,53 +75,102 @@
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
-        android:layout_height="120dp"
+        android:layout_height="wrap_content"
         android:background="#99000000"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Thumbnail / Gallery -->
-        <com.google.android.material.imageview.ShapeableImageView
-            android:id="@+id/thumbnail"
-            android:layout_width="50dp"
-            android:layout_height="50dp"
-            android:layout_marginStart="32dp"
-            android:background="#333333"
-            android:padding="1dp"
-            app:shapeAppearanceOverlay="@style/CircleImage"
-            app:layout_constraintBottom_toBottomOf="parent"
+        <!-- Horizontal EV Slider -->
+        <LinearLayout
+            android:id="@+id/evContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="12dp"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintStart_toStartOf="parent"/>
+            app:layout_constraintBottom_toTopOf="@id/shutterContainer">
             
-        <View
-            android:id="@+id/btnGallery"
-            android:layout_width="50dp"
-            android:layout_height="50dp"
-            app:layout_constraintStart_toStartOf="@id/thumbnail"
-            app:layout_constraintTop_toTopOf="@id/thumbnail"/>
+            <TextView 
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="-10" 
+                android:textColor="#FFF" 
+                android:textSize="10sp"/>
+                
+            <com.google.android.material.slider.Slider
+                android:id="@+id/evSlider"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:valueFrom="-10.0"
+                android:valueTo="10.0"
+                android:stepSize="1.0"
+                android:value="0.0"
+                app:thumbColor="#FF9800"
+                app:trackColorActive="#FF9800"
+                app:trackColorInactive="#888888"
+                app:tickVisible="false"/>
+                
+            <TextView 
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+10" 
+                android:textColor="#FFF" 
+                android:textSize="10sp"/>
+        </LinearLayout>
 
-        <!-- Shutter Button -->
-        <View
-            android:id="@+id/btnShutter"
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:background="@drawable/bg_shutter"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/shutterContainer"
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            app:layout_constraintTop_toBottomOf="@id/evContainer"
+            app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Editor Toggle -->
-        <ImageView
-            android:id="@+id/btnEdit"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:src="@android:drawable/ic_menu_edit"
-            app:tint="#FFFFFF"
-            android:layout_marginEnd="32dp"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintTop_toTopOf="parent"/>
+            <!-- Thumbnail / Gallery -->
+            <com.google.android.material.imageview.ShapeableImageView
+                android:id="@+id/thumbnail"
+                android:layout_width="50dp"
+                android:layout_height="50dp"
+                android:layout_marginStart="32dp"
+                android:background="#333333"
+                android:padding="1dp"
+                app:shapeAppearanceOverlay="@style/CircleImage"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintStart_toStartOf="parent"/>
+                
+            <View
+                android:id="@+id/btnGallery"
+                android:layout_width="50dp"
+                android:layout_height="50dp"
+                app:layout_constraintStart_toStartOf="@id/thumbnail"
+                app:layout_constraintTop_toTopOf="@id/thumbnail"/>
 
+            <!-- Shutter Button -->
+            <View
+                android:id="@+id/btnShutter"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:background="@drawable/bg_shutter"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+
+            <!-- Editor Toggle -->
+            <ImageView
+                android:id="@+id/btnEdit"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@android:drawable/ic_menu_edit"
+                app:tint="#FFFFFF"
+                android:layout_marginEnd="32dp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintTop_toTopOf="parent"/>
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 
     <!-- Processing Indicator -->
@@ -289,56 +304,98 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView 
-                    android:layout_width="wrap_content"
+                <TextView android:text="Content Elements" android:textColor="#CCC" android:textSize="12sp"/>
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/swLogo"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Style" 
-                    android:textColor="#CCC" 
-                    android:textSize="12sp"/>
-                <RadioGroup
-                    android:id="@+id/rgStyle"
+                    android:text="Show Logo/Text"
+                    android:checked="true"
+                    android:textColor="#FFF"/>
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/swDate"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Show Date &amp; Time"
+                    android:checked="true"
+                    android:textColor="#FFF"/>
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/swGPS"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Show Coordinates"
+                    android:checked="true"
+                    android:textColor="#FFF"/>
+
+                <TextView android:text="Location Details" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/cbCity"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:text="City/District"
+                        android:checked="true"
+                        android:textColor="#FFF"/>
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/cbStreet"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:text="Street Name"
+                        android:checked="false"
+                        android:textColor="#FFF"/>
+                </LinearLayout>
+
+                <TextView android:text="Style &amp; Appearance" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
+                    android:gravity="center_vertical"
                     android:layout_marginBottom="8dp">
-                    <RadioButton 
-                        android:id="@+id/rbFooter" 
+                    
+                    <RadioGroup
+                        android:id="@+id/rgStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Footer" 
-                        android:textColor="#FFF" 
+                        android:orientation="horizontal"
+                        android:layout_marginEnd="16dp">
+                        <RadioButton android:id="@+id/rbFooter" android:text="Footer" android:textColor="#FFF" android:checked="true"/>
+                        <RadioButton android:id="@+id/rbOverlay" android:text="Overlay" android:textColor="#FFF" android:layout_marginStart="8dp"/>
+                    </RadioGroup>
+                    
+                    <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
+
+                    <ToggleButton
+                        android:id="@+id/toggleBgColor"
+                        android:layout_width="50dp"
+                        android:layout_height="30dp"
+                        android:textOn="Wht"
+                        android:textOff="Blk"
+                        android:background="@drawable/bg_rounded_panel"
+                        android:textColor="#FFF"
                         android:checked="true"/>
-                    <RadioButton 
-                        android:id="@+id/rbOverlay" 
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Overlay" 
-                        android:textColor="#FFF" 
-                        android:layout_marginStart="16dp"/>
-                </RadioGroup>
-                
+                </LinearLayout>
+
                 <LinearLayout
                    android:layout_width="match_parent"
                    android:layout_height="wrap_content"
                    android:orientation="horizontal"
                    android:gravity="center_vertical">
-                   <ToggleButton
-                       android:id="@+id/toggleBgColor"
-                       android:layout_width="60dp"
-                       android:layout_height="30dp"
-                       android:textOn="Wht"
-                       android:textOff="Blk"
-                       android:checked="true"/>
+                   
                    <TextView 
                        android:layout_width="wrap_content"
                        android:layout_height="wrap_content"
                        android:text="Align:" 
                        android:textColor="#CCC" 
-                       android:layout_marginStart="16dp" 
                        android:layout_marginEnd="8dp"/>
-                   <ImageView android:id="@+id/alignLeft" android:src="@android:drawable/ic_media_previous" android:layout_width="24dp" android:layout_height="24dp" app:tint="#FFF"/>
-                   <ImageView android:id="@+id/alignCenter" android:src="@android:drawable/ic_media_pause" android:layout_width="24dp" android:layout_height="24dp" app:tint="#888"/>
-                   <ImageView android:id="@+id/alignRight" android:src="@android:drawable/ic_media_next" android:layout_width="24dp" android:layout_height="24dp" app:tint="#888"/>
+                   <ImageView android:id="@+id/alignLeft" android:src="@android:drawable/ic_media_previous" android:layout_width="32dp" android:layout_height="32dp" app:tint="#FFF" android:padding="4dp"/>
+                   <ImageView android:id="@+id/alignCenter" android:src="@android:drawable/ic_media_pause" android:layout_width="32dp" android:layout_height="32dp" app:tint="#888" android:padding="4dp"/>
+                   <ImageView android:id="@+id/alignRight" android:src="@android:drawable/ic_media_next" android:layout_width="32dp" android:layout_height="32dp" app:tint="#888" android:padding="4dp"/>
                 </LinearLayout>
 
                 <TextView 
