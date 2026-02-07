@@ -128,7 +128,7 @@ public class CurveView extends View {
         textBgPaint.setColor(0xCC000000);
         textBgPaint.setStyle(Paint.Style.FILL);
         textBgPaint.setAntiAlias(true);
-        textBgPaint.setCornerPathEffect(new CornerPathEffect(8));
+        textBgPaint.setPathEffect(new CornerPathEffect(8));
         
         crosshairPaint = new Paint();
         crosshairPaint.setColor(0x88FFFFFF);

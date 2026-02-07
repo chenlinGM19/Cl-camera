@@ -555,7 +555,7 @@ public class MainActivity extends AppCompatActivity {
             }
             
             // ISO
-            String iso = exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY);
+            String iso = exif.getAttribute(ExifInterface.TAG_ISO);
             if (iso != null) {
                 if (exifBuilder.length() > 0) exifBuilder.append(" ");
                 exifBuilder.append("ISO").append(iso);
