@@ -455,12 +455,8 @@ public class MainActivity extends AppCompatActivity {
             });
             
             // Setup EV Slider Range
-            camera.getCameraInfo().getExposureState().observe(this, exposureState -> {
-                Range<Integer> range = exposureState.getExposureCompensationRange();
-                float step = exposureState.getExposureCompensationStep().floatValue();
-                // Update Slider if needed to match hardware range
-                // For simplicity we keep slider -4 to 4 and just clamp in listener
-            });
+            ExposureState exposureState = camera.getCameraInfo().getExposureState();
+            Range<Integer> range = exposureState.getExposureCompensationRange();
             
         } catch (Exception exc) {
             Toast.makeText(this, "Camera init failed", Toast.LENGTH_SHORT).show();
