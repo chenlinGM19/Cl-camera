@@ -217,22 +217,45 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView android:text="Style" android:textColor="#CCC" android:textSize="12sp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Style" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp"/>
                 <RadioGroup
                     android:id="@+id/rgStyle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:layout_marginBottom="8dp">
-                    <RadioButton android:id="@+id/rbFooter" android:text="Footer Frame" android:textColor="#FFF" android:checked="true"/>
-                    <RadioButton android:id="@+id/rbOverlay" android:text="Overlay" android:textColor="#FFF" android:layout_marginStart="16dp"/>
+                    <RadioButton 
+                        android:id="@+id/rbFooter" 
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Footer Frame" 
+                        android:textColor="#FFF" 
+                        android:checked="true"/>
+                    <RadioButton 
+                        android:id="@+id/rbOverlay" 
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Overlay" 
+                        android:textColor="#FFF" 
+                        android:layout_marginStart="16dp"/>
                 </RadioGroup>
                 
                 <LinearLayout
                    android:layout_width="match_parent"
                    android:layout_height="wrap_content"
-                   android:orientation="horizontal">
-                   <TextView android:text="Background:" android:textColor="#CCC" android:layout_marginEnd="8dp"/>
+                   android:orientation="horizontal"
+                   android:gravity="center_vertical">
+                   <TextView 
+                       android:layout_width="wrap_content"
+                       android:layout_height="wrap_content"
+                       android:text="Background:" 
+                       android:textColor="#CCC" 
+                       android:layout_marginEnd="8dp"/>
                    <ToggleButton
                        android:id="@+id/toggleBgColor"
                        android:layout_width="60dp"
@@ -240,13 +263,25 @@
                        android:textOn="White"
                        android:textOff="Black"
                        android:checked="true"/>
-                   <TextView android:text="Align:" android:textColor="#CCC" android:layout_marginStart="16dp" android:layout_marginEnd="8dp"/>
+                   <TextView 
+                       android:layout_width="wrap_content"
+                       android:layout_height="wrap_content"
+                       android:text="Align:" 
+                       android:textColor="#CCC" 
+                       android:layout_marginStart="16dp" 
+                       android:layout_marginEnd="8dp"/>
                    <ImageView android:id="@+id/alignLeft" android:src="@android:drawable/ic_media_previous" android:layout_width="24dp" android:layout_height="24dp" app:tint="#FFF"/>
                    <ImageView android:id="@+id/alignCenter" android:src="@android:drawable/ic_media_pause" android:layout_width="24dp" android:layout_height="24dp" app:tint="#888"/>
                    <ImageView android:id="@+id/alignRight" android:src="@android:drawable/ic_media_next" android:layout_width="24dp" android:layout_height="24dp" app:tint="#888"/>
                 </LinearLayout>
 
-                <TextView android:text="Custom Text (Logo)" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Custom Text (Logo)" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp" 
+                    android:layout_marginTop="8dp"/>
                 <EditText
                     android:id="@+id/etWatermarkText"
                     android:layout_width="match_parent"
@@ -260,20 +295,60 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:layout_marginTop="4dp">
-                    <CheckBox android:id="@+id/cbDate" android:text="Date/Time" android:textColor="#FFF" android:checked="true" android:layout_weight="1"/>
-                    <CheckBox android:id="@+id/cbGPS" android:text="GPS Coords" android:textColor="#FFF" android:checked="true" android:layout_weight="1"/>
+                    <CheckBox 
+                        android:id="@+id/cbDate" 
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:text="Date/Time" 
+                        android:textColor="#FFF" 
+                        android:checked="true" 
+                        android:layout_weight="1"/>
+                    <CheckBox 
+                        android:id="@+id/cbGPS" 
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:text="GPS Coords" 
+                        android:textColor="#FFF" 
+                        android:checked="true" 
+                        android:layout_weight="1"/>
                 </LinearLayout>
 
-                <TextView android:text="Location Detail" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="4dp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Location Detail" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp" 
+                    android:layout_marginTop="4dp"/>
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal">
-                    <CheckBox android:id="@+id/cbCity" android:text="City/District" android:textColor="#FFF" android:checked="true" android:layout_weight="1"/>
-                    <CheckBox android:id="@+id/cbStreet" android:text="Street" android:textColor="#FFF" android:checked="false" android:layout_weight="1"/>
+                    <CheckBox 
+                        android:id="@+id/cbCity" 
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:text="City/District" 
+                        android:textColor="#FFF" 
+                        android:checked="true" 
+                        android:layout_weight="1"/>
+                    <CheckBox 
+                        android:id="@+id/cbStreet" 
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:text="Street" 
+                        android:textColor="#FFF" 
+                        android:checked="false" 
+                        android:layout_weight="1"/>
                 </LinearLayout>
 
-                <TextView android:text="Frame Height (%)" android:textColor="#CCC" android:textSize="12sp" android:layout_marginTop="8dp"/>
+                <TextView 
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Frame Height (%)" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp" 
+                    android:layout_marginTop="8dp"/>
                 <SeekBar
                     android:id="@+id/seekHeight"
                     android:layout_width="match_parent"
