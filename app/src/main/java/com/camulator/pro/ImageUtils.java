@@ -7,15 +7,8 @@ import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.PointF;
-import android.util.Xml;
+import android.util.Log;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlSerializer;
-
-import java.io.StringReader;
-import java.io.StringWriter;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -34,7 +27,8 @@ public class ImageUtils {
         HDR, CINEMATIC
     }
 
-    public static Bitmap processImage(Bitmap original, FilterType filterType, float filterIntensity,
+    // Process image with Saturation Slider support (XMP Saturation maps to -100..100)
+    public static Bitmap processImage(Bitmap original, FilterType filterType, float saturationVal,
                                       int[] lutRGB, int[] lutR, int[] lutG, int[] lutB,
                                       WatermarkConfig wmConfig, boolean cropToSquare) {
         
@@ -54,40 +48,34 @@ public class ImageUtils {
         Canvas canvas = new Canvas(mutable);
         Paint paint = new Paint();
 
-        // 2. Apply Filter (ColorMatrix) with Intensity
-        ColorMatrix targetCm = getFilterMatrix(filterType);
+        // 2. Base Filter
+        ColorMatrix cm = getFilterMatrix(filterType);
         
-        if (filterIntensity < 1.0f) {
-            // Blend with Identity Matrix
-            ColorMatrix identity = new ColorMatrix(); // Default is identity
-            targetCm = mixColorMatrices(identity, targetCm, filterIntensity);
-        }
+        // 3. Apply XMP Saturation (-100 to 100)
+        // 0 = Identity (1.0 scale). -100 = BW (0.0 scale). +100 = High Sat (2.0 scale).
+        float satScale = 1.0f + (saturationVal / 100f);
+        if (satScale < 0) satScale = 0;
         
-        paint.setColorFilter(new ColorMatrixColorFilter(targetCm));
+        ColorMatrix satCm = new ColorMatrix();
+        satCm.setSaturation(satScale);
+        
+        // Combine Base + Saturation
+        cm.postConcat(satCm);
+        
+        paint.setColorFilter(new ColorMatrixColorFilter(cm));
         canvas.drawBitmap(workingBitmap, 0, 0, paint);
         
-        // 3. Apply Curves (Pixel by Pixel)
+        // 4. Apply Curves (Pixel by Pixel)
         if (isCurveActive(lutRGB) || isCurveActive(lutR) || isCurveActive(lutG) || isCurveActive(lutB)) {
             applyCurves(mutable, lutRGB, lutR, lutG, lutB);
         }
 
-        // 4. Apply Watermark
+        // 5. Apply Watermark
         if (wmConfig.enabled) {
             drawWatermark(canvas, mutable.getWidth(), mutable.getHeight(), wmConfig);
         }
 
         return mutable;
-    }
-    
-    private static ColorMatrix mixColorMatrices(ColorMatrix c1, ColorMatrix c2, float intensity) {
-        float[] m1 = c1.getArray();
-        float[] m2 = c2.getArray();
-        float[] result = new float[20];
-        
-        for (int i = 0; i < 20; i++) {
-            result[i] = m1[i] + (m2[i] - m1[i]) * intensity;
-        }
-        return new ColorMatrix(result);
     }
     
     private static boolean isCurveActive(int[] lut) {
@@ -123,7 +111,7 @@ public class ImageUtils {
     private static ColorMatrix getFilterMatrix(FilterType type) {
         ColorMatrix cm = new ColorMatrix();
         switch (type) {
-            case VIVID: cm.setSaturation(1.5f); break;
+            case VIVID: cm.setSaturation(1.3f); break;
             case MATTE: 
                 cm.set(new float[] { 1,0,0,0,20, 0,1,0,0,20, 0,0,1,0,20, 0,0,0,1,0 });
                 break;
@@ -210,18 +198,53 @@ public class ImageUtils {
         }
     }
     
-    // --- XMP / JSON Preset Model ---
+    // --- XMP / Preset Model ---
     
     public static class CurvePreset {
+        public String name = "New Preset";
         public List<PointF> rgb = new ArrayList<>();
         public List<PointF> r = new ArrayList<>();
         public List<PointF> g = new ArrayList<>();
         public List<PointF> b = new ArrayList<>();
-        public String name = "Preset";
+        public float saturation = 0f; // -100 to 100
+        
+        public CurvePreset() {
+             reset();
+        }
+        
+        public void reset() {
+            rgb = defaultPoints();
+            r = defaultPoints();
+            g = defaultPoints();
+            b = defaultPoints();
+            saturation = 0f;
+        }
+        
+        private List<PointF> defaultPoints() {
+            List<PointF> p = new ArrayList<>();
+            p.add(new PointF(0f, 1f));
+            p.add(new PointF(1f, 0f));
+            return p;
+        }
         
         public static CurvePreset fromXmp(String xmpContent) {
             CurvePreset preset = new CurvePreset();
-            // Basic regex parsing for robustness against namespace variations
+            
+            // Extract Name
+            Matcher nameMatcher = Pattern.compile("<crs:Name>\\s*<rdf:Alt>\\s*<rdf:li[^>]*>(.*?)</rdf:li>", Pattern.DOTALL).matcher(xmpContent);
+            if (nameMatcher.find()) {
+                preset.name = nameMatcher.group(1).trim();
+            }
+
+            // Extract Saturation
+            Matcher satMatcher = Pattern.compile("crs:Saturation=\"([^\"]+)\"").matcher(xmpContent);
+            if (satMatcher.find()) {
+                try {
+                    preset.saturation = Float.parseFloat(satMatcher.group(1));
+                } catch (Exception e) {}
+            }
+
+            // Extract Curves
             preset.rgb = parseXmpPoints(xmpContent, "ToneCurvePV2012");
             preset.r = parseXmpPoints(xmpContent, "ToneCurvePV2012Red");
             preset.g = parseXmpPoints(xmpContent, "ToneCurvePV2012Green");
@@ -231,8 +254,6 @@ public class ImageUtils {
         
         private static List<PointF> parseXmpPoints(String content, String tagName) {
              List<PointF> points = new ArrayList<>();
-             // Match content between <crs:tagName> and </crs:tagName>
-             // Then find rdf:li items
              try {
                  Pattern tagPattern = Pattern.compile("<crs:" + tagName + ">(.*?)</crs:" + tagName + ">", Pattern.DOTALL);
                  Matcher tagMatcher = tagPattern.matcher(content);
@@ -243,16 +264,7 @@ public class ImageUtils {
                      while (liMatcher.find()) {
                          float x = Float.parseFloat(liMatcher.group(1)) / 255f;
                          float y = Float.parseFloat(liMatcher.group(2)) / 255f;
-                         // Invert Y because screen Y is 0 at top, math Y is 0 at bottom
-                         // Actually CurveView expects 0..1 (0=left/top, 1=right/bottom). 
-                         // But Standard Curve: 0,0 is black (bottom-left), 255,255 is white (top-right).
-                         // CurveView implementation: Y=0 is Top.
-                         // Standard Curve: Input 0 -> Output 0. 
-                         // In CurveView Logic: x=0, y=1 (Visual Bottom-Left).
-                         // We need to map 0-255 inputs to CurveView 0-1 logic.
-                         
-                         // X: 0 -> 0.0, 255 -> 1.0
-                         // Y: 0 -> 1.0 (Visual Bottom), 255 -> 0.0 (Visual Top)
+                         // Invert Y for CurveView
                          points.add(new PointF(x, 1.0f - y)); 
                      }
                  }
@@ -269,7 +281,13 @@ public class ImageUtils {
             StringBuilder sb = new StringBuilder();
             sb.append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n");
             sb.append(" <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
-            sb.append("  <rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\">\n");
+            sb.append("  <rdf:Description rdf:about=\"\" \n");
+            sb.append("    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n");
+            sb.append("    crs:Version=\"18.1\"\n");
+            sb.append("    crs:Saturation=\"").append((int)saturation).append("\"\n");
+            sb.append("    crs:HasSettings=\"True\">\n");
+            
+            sb.append("   <crs:Name>\n    <rdf:Alt>\n     <rdf:li xml:lang=\"x-default\">").append(name).append("</rdf:li>\n    </rdf:Alt>\n   </crs:Name>\n");
             
             appendCurveXmp(sb, "ToneCurvePV2012", rgb);
             appendCurveXmp(sb, "ToneCurvePV2012Red", r);
@@ -286,9 +304,8 @@ public class ImageUtils {
             sb.append("   <crs:").append(tagName).append(">\n");
             sb.append("    <rdf:Seq>\n");
             for(PointF p : points) {
-                // Convert back from CurveView (0..1, inv Y) to XMP (0..255, normal Y)
                 int x = Math.round(p.x * 255);
-                int y = Math.round((1.0f - p.y) * 255);
+                int y = Math.round((1.0f - p.y) * 255); // Invert back
                 sb.append("     <rdf:li>").append(x).append(", ").append(y).append("</rdf:li>\n");
             }
             sb.append("    </rdf:Seq>\n");

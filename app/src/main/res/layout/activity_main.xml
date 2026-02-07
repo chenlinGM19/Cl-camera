@@ -54,23 +54,25 @@
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/presetEditorContainer"
         android:layout_width="match_parent"
-        android:layout_height="380dp"
-        android:background="#E6000000"
+        android:layout_height="450dp"
+        android:background="#F2111111"
         android:visibility="gone"
-        android:padding="12dp"
         android:clickable="true"
         android:focusable="true"
         android:elevation="20dp"
         app:layout_constraintBottom_toBottomOf="parent">
         
+        <!-- Header -->
         <TextView
             android:id="@+id/tvEditorTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Preset Editor"
+            android:text="Preset Studio"
             android:textColor="#FFFFFF"
             android:textStyle="bold"
             android:textSize="14sp"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="16dp"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent"/>
             
@@ -79,13 +81,33 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:text="✕"
-            android:textSize="16sp"
+            android:textSize="18sp"
             android:backgroundTint="#00000000"
             android:textColor="#FFFFFF"
             android:padding="0dp"
+            android:layout_marginEnd="8dp"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintEnd_toEndOf="parent"/>
 
+        <!-- Preset List -->
+        <HorizontalScrollView
+            android:id="@+id/svPresets"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:scrollbars="none"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:clipToPadding="false"
+            app:layout_constraintTop_toBottomOf="@id/tvEditorTitle">
+            <LinearLayout
+                android:id="@+id/llPresetList"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"/>
+        </HorizontalScrollView>
+
+        <!-- Channel Selector -->
         <LinearLayout
             android:id="@+id/curveChannels"
             android:layout_width="match_parent"
@@ -93,7 +115,7 @@
             android:orientation="horizontal"
             android:gravity="center"
             android:layout_marginTop="8dp"
-            app:layout_constraintTop_toBottomOf="@id/tvEditorTitle">
+            app:layout_constraintTop_toBottomOf="@id/svPresets">
             
             <Button android:id="@+id/btnCurveRGB" android:layout_width="50dp" android:layout_height="35dp" android:text="RGB" android:textSize="10sp" android:backgroundTint="#FFFFFF" android:textColor="#000" android:layout_marginEnd="4dp" android:padding="0dp"/>
             <Button android:id="@+id/btnCurveR" android:layout_width="50dp" android:layout_height="35dp" android:text="Red" android:textSize="10sp" android:backgroundTint="#FF4444" android:textColor="#FFF" android:layout_marginEnd="4dp" android:padding="0dp"/>
@@ -101,6 +123,7 @@
             <Button android:id="@+id/btnCurveB" android:layout_width="50dp" android:layout_height="35dp" android:text="Blu" android:textSize="10sp" android:backgroundTint="#4444FF" android:textColor="#FFF" android:padding="0dp"/>
         </LinearLayout>
 
+        <!-- Curve View -->
         <com.camulator.pro.CurveView
             android:id="@+id/curveView"
             android:layout_width="0dp"
@@ -109,45 +132,85 @@
             android:layout_marginBottom="8dp"
             android:background="#44222222"
             app:layout_constraintTop_toBottomOf="@id/curveChannels"
-            app:layout_constraintBottom_toTopOf="@id/curveActions"
+            app:layout_constraintBottom_toTopOf="@id/llSaturation"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent" />
 
+        <!-- Saturation Slider (XMP Saturation) -->
+        <LinearLayout
+            android:id="@+id/llSaturation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="4dp"
+            app:layout_constraintBottom_toTopOf="@id/curveActions">
+            
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Sat"
+                android:textColor="#AAAAAA"
+                android:textSize="11sp"/>
+                
+            <SeekBar
+                android:id="@+id/sbSaturation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="200"
+                android:progress="100"
+                android:progressTint="#FFD700"
+                android:thumbTint="#FFFFFF"/>
+        </LinearLayout>
+
+        <!-- Bottom Actions -->
         <LinearLayout
             android:id="@+id/curveActions"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center"
+            android:paddingBottom="12dp"
             app:layout_constraintBottom_toBottomOf="parent">
 
             <Button
                 android:id="@+id/btnImportXmp"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Import .XMP"
-                android:textSize="11sp"
+                android:layout_height="40dp"
+                android:text="Import"
+                android:textSize="10sp"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:textColor="#FFFFFF"
-                android:layout_marginEnd="8dp"/>
+                android:layout_marginEnd="4dp"/>
+            
+             <Button
+                android:id="@+id/btnSavePreset"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:text="Save"
+                android:textSize="10sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="4dp"/>
 
             <Button
                 android:id="@+id/btnExportXmp"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Export .XMP"
-                android:textSize="11sp"
+                android:layout_height="40dp"
+                android:text="Export"
+                android:textSize="10sp"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:textColor="#FFFFFF"
-                android:layout_marginEnd="8dp"/>
+                android:layout_marginEnd="4dp"/>
                 
             <Button
                 android:id="@+id/btnResetCurve"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="40dp"
                 android:text="Reset"
-                android:textSize="11sp"
-                android:backgroundTint="#AA0000"/>
+                android:textSize="10sp"
+                android:backgroundTint="#AA3333"/>
         </LinearLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
@@ -179,33 +242,7 @@
                 android:gravity="center_vertical"/>
         </HorizontalScrollView>
 
-        <!-- Filter Intensity -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="4dp">
-            
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Strength"
-                android:textColor="#AAAAAA"
-                android:textSize="10sp"
-                android:layout_marginEnd="8dp"/>
-                
-            <SeekBar
-                android:id="@+id/sbFilterIntensity"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="100"
-                android:progress="100"
-                android:progressTint="#FFD700"
-                android:thumbTint="#FFFFFF"/>
-        </LinearLayout>
-
-        <!-- Filter Selector -->
+        <!-- Filter Selector (Base Look) -->
         <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -239,7 +276,7 @@
                 android:id="@+id/btnEditPreset"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Edit Preset"
+                android:text="Preset Editor"
                 android:textSize="12sp"
                 style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:textColor="#FFD700"/>
