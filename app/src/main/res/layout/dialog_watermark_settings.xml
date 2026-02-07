@@ -28,6 +28,65 @@
             android:checked="true"
             android:minHeight="48dp"/>
 
+        <!-- Style Section -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Style & Color"
+            android:textColor="#FFD700"
+            android:textSize="14sp"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="8dp"/>
+
+        <RadioGroup
+            android:id="@+id/rgStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            
+            <RadioButton
+                android:id="@+id/rbStyleOverlay"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Overlay"
+                android:textColor="#FFFFFF"/>
+                
+            <RadioButton
+                android:id="@+id/rbStyleFooter"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Footer Frame"
+                android:textColor="#FFFFFF"/>
+        </RadioGroup>
+
+        <RadioGroup
+            android:id="@+id/rgBgColor"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            
+            <RadioButton
+                android:id="@+id/rbBgWhite"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="White BG"
+                android:textColor="#FFFFFF"/>
+                
+            <RadioButton
+                android:id="@+id/rbBgBlack"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Black BG"
+                android:textColor="#FFFFFF"/>
+        </RadioGroup>
+
+        <!-- Content Section -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -84,10 +143,11 @@
             android:checked="false"
             android:minHeight="48dp"/>
 
+        <!-- Layout Section -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Appearance"
+            android:text="Layout"
             android:textColor="#FFD700"
             android:textSize="14sp"
             android:layout_marginTop="16dp"
@@ -96,7 +156,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Position"
+            android:text="Alignment"
             android:textColor="#FFFFFF"/>
 
         <RadioGroup

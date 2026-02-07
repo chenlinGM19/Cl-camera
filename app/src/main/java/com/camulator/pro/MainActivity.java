@@ -6,21 +6,19 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
-import android.graphics.PointF;
-import android.hardware.camera2.CameraCharacteristics;
 import android.location.Address;
 import android.location.Geocoder;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.SizeF;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -47,6 +45,7 @@ import androidx.camera.core.Preview;
 import androidx.camera.core.ZoomState;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
+import androidx.cardview.widget.CardView;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -74,13 +73,14 @@ public class MainActivity extends AppCompatActivity {
     private ImageCapture imageCapture;
     private ExecutorService cameraExecutor;
     private PreviewView viewFinder;
-    private ImageView ivEditPreview;
+    private ImageView ivPreviewOverlay; // Unified Preview
     private CurveView curveView;
     private View presetEditorContainer, controlsContainer;
     private View maskTop, maskBottom;
     private LinearLayout focalLengthContainer, filterContainer, llPresetList;
     private Button btnRatio;
     private SeekBar sbSaturation;
+    private ImageView ivLastImage;
 
     private FusedLocationProviderClient fusedLocationClient;
     private Camera camera;
@@ -95,13 +95,15 @@ public class MainActivity extends AppCompatActivity {
     
     private int aspectRatioMode = 0; // 0=4:3, 1=16:9, 2=1:1
     
-    // Freeze Frame Bitmap for Editing
-    private Bitmap frozenPreviewBitmap;
-
     private static final float FULL_FRAME_DIAGONAL = 43.2666f;
     private float baseEquivalentFocalLength = 24.0f; 
     private static final int[] FOCAL_LENGTHS = {16, 24, 28, 35, 50, 75, 85, 105, 135};
     private int selectedFocalLength = 24;
+    
+    // Live Preview Loop
+    private final Handler livePreviewHandler = new Handler(Looper.getMainLooper());
+    private boolean isPreviewRunning = true;
+    private boolean isFrozen = false; // "Editor Mode" state
     
     private ActivityResultLauncher<Intent> exportLauncher;
     private ActivityResultLauncher<Intent> importLauncher;
@@ -111,8 +113,9 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        // Bind Views
         viewFinder = findViewById(R.id.viewFinder);
-        ivEditPreview = findViewById(R.id.ivEditPreview);
+        ivPreviewOverlay = findViewById(R.id.ivPreviewOverlay);
         curveView = findViewById(R.id.curveView);
         presetEditorContainer = findViewById(R.id.presetEditorContainer);
         controlsContainer = findViewById(R.id.controlsContainer);
@@ -123,10 +126,10 @@ public class MainActivity extends AppCompatActivity {
         llPresetList = findViewById(R.id.llPresetList);
         btnRatio = findViewById(R.id.btnRatio);
         sbSaturation = findViewById(R.id.sbSaturation);
+        ivLastImage = findViewById(R.id.ivLastImage);
         
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
-        
-        curveView.setOnCurveChangeListener(this::updateFreezeFramePreview);
+        curveView.setOnCurveChangeListener(this::triggerPreviewUpdate);
 
         loadDefaultPresets();
         setupControls();
@@ -143,8 +146,77 @@ public class MainActivity extends AppCompatActivity {
         } else {
             requestPermissions();
         }
+        
+        // Start Live Preview Loop
+        startLivePreviewLoop();
     }
     
+    // ----------------------
+    // Real-time Preview Logic
+    // ----------------------
+    private final Runnable previewRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (isPreviewRunning && !isFrozen && viewFinder.getBitmap() != null) {
+                processPreviewFrame();
+            }
+            livePreviewHandler.postDelayed(this, 60); // ~15-20 FPS target for UI thread
+        }
+    };
+    
+    private void startLivePreviewLoop() {
+        livePreviewHandler.post(previewRunnable);
+    }
+    
+    private void processPreviewFrame() {
+        // Grab smaller bitmap for speed (Screen width / 2)
+        Bitmap raw = viewFinder.getBitmap(); // Polling view content
+        if (raw == null) return;
+        
+        // Scale down for realtime processing performance
+        int w = raw.getWidth() / 2;
+        int h = raw.getHeight() / 2;
+        if (w <= 0 || h <= 0) return;
+        
+        Bitmap scaled = Bitmap.createScaledBitmap(raw, w, h, false);
+        
+        cameraExecutor.execute(() -> {
+            try {
+                int[] lutRGB = curveView.getLutRGB();
+                int[] lutR = curveView.getLutR();
+                int[] lutG = curveView.getLutG();
+                int[] lutB = curveView.getLutB();
+                
+                // Only process filters/curves, no watermark for live preview (cleaner)
+                ImageUtils.WatermarkConfig emptyWm = new ImageUtils.WatermarkConfig();
+                emptyWm.enabled = false;
+                
+                Bitmap processed = ImageUtils.processImage(scaled, currentFilter, currentSaturation,
+                        lutRGB, lutR, lutG, lutB, emptyWm, false);
+                
+                runOnUiThread(() -> {
+                    // Update overlay only if we are still live
+                    if (!isFrozen) {
+                        ivPreviewOverlay.setImageBitmap(processed);
+                    }
+                });
+            } catch (Exception e) {}
+        });
+    }
+
+    private void triggerPreviewUpdate() {
+        // Called by sliders/curves
+        if (isFrozen) {
+            // Update the frozen high-res image
+            updateFreezeFramePreview();
+        } 
+        // If live, loop picks it up automatically via member vars
+    }
+
+    // ----------------------
+    // Standard Controls
+    // ----------------------
+
     private void loadDefaultPresets() {
         ImageUtils.CurvePreset pDefault = new ImageUtils.CurvePreset();
         pDefault.name = "Reset";
@@ -174,9 +246,7 @@ public class MainActivity extends AppCompatActivity {
     }
     
     private void saveXmpToFile(Uri uri) {
-        // Sync current UI state to preset object
         captureCurrentStateToPreset(currentPreset);
-        
         String xmp = currentPreset.toXmp();
         try {
             OutputStream os = getContentResolver().openOutputStream(uri);
@@ -201,13 +271,11 @@ public class MainActivity extends AppCompatActivity {
                 sb.append(line).append("\n");
             }
             is.close();
-            
             ImageUtils.CurvePreset newPreset = ImageUtils.CurvePreset.fromXmp(sb.toString());
             loadedPresets.add(newPreset);
             refreshPresetListUI();
             applyPreset(newPreset);
             Toast.makeText(this, "Imported: " + newPreset.name, Toast.LENGTH_SHORT).show();
-            
         } catch (Exception e) {
             e.printStackTrace();
             Toast.makeText(this, "Invalid XMP File", Toast.LENGTH_SHORT).show();
@@ -216,6 +284,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupControls() {
         findViewById(R.id.btnCapture).setOnClickListener(v -> takePhoto());
+        
+        findViewById(R.id.btnGallery).setOnClickListener(v -> {
+            startActivity(new Intent(this, GalleryActivity.class));
+        });
         
         btnRatio.setOnClickListener(v -> {
             aspectRatioMode = (aspectRatioMode + 1) % 3;
@@ -226,14 +298,11 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btnEditPreset).setOnClickListener(v -> enterEditorMode());
         findViewById(R.id.btnCloseEditor).setOnClickListener(v -> exitEditorMode());
 
-        // Saturation Slider: 0 to 200 => -100 to 100
         sbSaturation.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 currentSaturation = progress - 100;
-                if (presetEditorContainer.getVisibility() == View.VISIBLE) {
-                    updateFreezeFramePreview();
-                }
+                triggerPreviewUpdate();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
@@ -243,7 +312,7 @@ public class MainActivity extends AppCompatActivity {
             currentSaturation = 0;
             sbSaturation.setProgress(100);
             curveView.resetCurves();
-            updateFreezeFramePreview();
+            triggerPreviewUpdate();
         });
         
         findViewById(R.id.btnSavePreset).setOnClickListener(v -> showSavePresetDialog());
@@ -330,23 +399,22 @@ public class MainActivity extends AppCompatActivity {
         curveView.setPoints(CurveView.Channel.RED, preset.r);
         curveView.setPoints(CurveView.Channel.GREEN, preset.g);
         curveView.setPoints(CurveView.Channel.BLUE, preset.b);
-        
         currentSaturation = preset.saturation;
         sbSaturation.setProgress((int)(currentSaturation + 100));
-        
-        updateFreezeFramePreview();
+        triggerPreviewUpdate();
     }
     
+    // Switch to Freeze Frame "Editor Mode"
     private void enterEditorMode() {
-        frozenPreviewBitmap = viewFinder.getBitmap();
-        if (frozenPreviewBitmap != null) {
-            ivEditPreview.setImageBitmap(frozenPreviewBitmap);
-            ivEditPreview.setVisibility(View.VISIBLE);
-            
+        // Capture high-res freeze frame from preview
+        Bitmap highRes = viewFinder.getBitmap();
+        if (highRes != null) {
+            isFrozen = true;
+            frozenPreviewBitmap = highRes;
+            ivPreviewOverlay.setImageBitmap(highRes); // Set static image
             presetEditorContainer.setVisibility(View.VISIBLE);
             controlsContainer.setVisibility(View.GONE);
-            
-            updateFreezeFramePreview();
+            updateFreezeFramePreview(); // Apply current effect to static image
         } else {
             Toast.makeText(this, "Wait for preview...", Toast.LENGTH_SHORT).show();
         }
@@ -354,27 +422,24 @@ public class MainActivity extends AppCompatActivity {
     
     private void exitEditorMode() {
         presetEditorContainer.setVisibility(View.GONE);
-        ivEditPreview.setVisibility(View.GONE);
         controlsContainer.setVisibility(View.VISIBLE);
         frozenPreviewBitmap = null;
+        isFrozen = false; // Resume Live Loop
     }
     
     private void updateFreezeFramePreview() {
-        if (frozenPreviewBitmap == null || presetEditorContainer.getVisibility() != View.VISIBLE) return;
-        
+        if (frozenPreviewBitmap == null) return;
         cameraExecutor.execute(() -> {
              int[] lutRGB = curveView.getLutRGB();
              int[] lutR = curveView.getLutR();
              int[] lutG = curveView.getLutG();
              int[] lutB = curveView.getLutB();
-             
              Bitmap processed = ImageUtils.processImage(frozenPreviewBitmap, 
                  currentFilter, currentSaturation, 
                  lutRGB, lutR, lutG, lutB, 
                  new ImageUtils.WatermarkConfig() {{ enabled = false; }}, 
                  false); 
-                 
-             runOnUiThread(() -> ivEditPreview.setImageBitmap(processed));
+             runOnUiThread(() -> ivPreviewOverlay.setImageBitmap(processed));
         });
     }
     
@@ -400,22 +465,18 @@ public class MainActivity extends AppCompatActivity {
             Button btn = new Button(this, null, android.R.attr.borderlessButtonStyle);
             btn.setText(type.name().replace("_", " "));
             btn.setTextColor(type == currentFilter ? Color.YELLOW : Color.WHITE);
-            btn.setTextSize(11);
+            btn.setTextSize(12);
             btn.setBackgroundColor(Color.TRANSPARENT);
-            
             btn.setOnClickListener(v -> {
                 currentFilter = type;
                 setupFilterButtons(); 
-                if (presetEditorContainer.getVisibility() == View.VISIBLE) {
-                    updateFreezeFramePreview();
-                }
+                triggerPreviewUpdate();
             });
             filterContainer.addView(btn);
         }
     }
 
-    // ... (Focal Length, Camera Start, Permission, Watermark Dialog same as previous) ...
-    // Re-implemented standard methods for completeness within XML block constraints
+    // ... (Permission and Camera setup remains standard) ...
 
     private void showWatermarkSettingsDialog() {
         BottomSheetDialog dialog = new BottomSheetDialog(this);
@@ -429,6 +490,8 @@ public class MainActivity extends AppCompatActivity {
         Switch swPlace = dialog.findViewById(R.id.swShowPlace);
         RadioGroup rgSize = dialog.findViewById(R.id.rgTextSize);
         RadioGroup rgPos = dialog.findViewById(R.id.rgPosition);
+        RadioGroup rgStyle = dialog.findViewById(R.id.rgStyle);
+        RadioGroup rgBg = dialog.findViewById(R.id.rgBgColor);
 
         if (swEnabled != null) {
             swEnabled.setChecked(wmConfig.enabled);
@@ -448,6 +511,12 @@ public class MainActivity extends AppCompatActivity {
                 case 1: rgPos.check(R.id.rbPosCenter); break;
                 case 2: rgPos.check(R.id.rbPosRight); break;
             }
+            
+            if (wmConfig.styleFooter) rgStyle.check(R.id.rbStyleFooter);
+            else rgStyle.check(R.id.rbStyleOverlay);
+            
+            if (wmConfig.backgroundColor == Color.BLACK) rgBg.check(R.id.rbBgBlack);
+            else rgBg.check(R.id.rbBgWhite);
 
             dialog.setOnDismissListener(d -> {
                 wmConfig.enabled = swEnabled.isChecked();
@@ -466,6 +535,16 @@ public class MainActivity extends AppCompatActivity {
                 if (posId == R.id.rbPosLeft) wmConfig.position = 0;
                 else if (posId == R.id.rbPosCenter) wmConfig.position = 1;
                 else if (posId == R.id.rbPosRight) wmConfig.position = 2;
+                
+                wmConfig.styleFooter = (rgStyle.getCheckedRadioButtonId() == R.id.rbStyleFooter);
+                
+                if (rgBg.getCheckedRadioButtonId() == R.id.rbBgBlack) {
+                    wmConfig.backgroundColor = Color.BLACK;
+                    wmConfig.textColor = Color.WHITE;
+                } else {
+                    wmConfig.backgroundColor = Color.WHITE;
+                    wmConfig.textColor = Color.BLACK;
+                }
                 
                 if (wmConfig.showPlace && (wmConfig.placeName == null || wmConfig.placeName.isEmpty())) {
                     updateLocation();
@@ -554,6 +633,8 @@ public class MainActivity extends AppCompatActivity {
     private void takePhoto() {
         if (imageCapture == null) return;
         Toast.makeText(this, "Capturing...", Toast.LENGTH_SHORT).show();
+        
+        // Use full res settings
         int[] lutRGB = curveView.getLutRGB();
         int[] lutR = curveView.getLutR();
         int[] lutG = curveView.getLutG();
@@ -572,7 +653,12 @@ public class MainActivity extends AppCompatActivity {
                     try {
                         Bitmap processed = ImageUtils.processImage(bitmap, filter, sat,
                                 lutRGB, lutR, lutG, lutB, wmConfig, crop);
-                        saveImage(processed);
+                        Uri savedUri = saveImage(processed);
+                        
+                        // Update Thumbnail
+                        if (savedUri != null) {
+                            runOnUiThread(() -> ivLastImage.setImageBitmap(processed));
+                        }
                     } catch (Exception e) {
                         e.printStackTrace();
                         runOnUiThread(() -> Toast.makeText(MainActivity.this, "Error Processing", Toast.LENGTH_SHORT).show());
@@ -595,7 +681,7 @@ public class MainActivity extends AppCompatActivity {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
     }
 
-    private void saveImage(Bitmap bitmap) {
+    private Uri saveImage(Bitmap bitmap) {
         String filename = "CAM_" + System.currentTimeMillis() + ".jpg";
         ContentValues contentValues = new ContentValues();
         contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, filename);
@@ -618,15 +704,14 @@ public class MainActivity extends AppCompatActivity {
                     getContentResolver().update(uri, contentValues, null, null);
                 }
                 MediaScannerConnection.scanFile(this, new String[]{ getPathFromUri(uri) }, null, null);
+                
                 runOnUiThread(() -> {
                     Toast.makeText(this, "Saved!", Toast.LENGTH_SHORT).show();
-                    Intent intent = new Intent(Intent.ACTION_VIEW);
-                    intent.setDataAndType(uri, "image/jpeg");
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivity(Intent.createChooser(intent, "Open Image"));
                 });
+                return uri;
             }
         } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "Error Saving", Toast.LENGTH_SHORT).show()); }
+        return null;
     }
     
     private String getPathFromUri(Uri uri) {
@@ -677,6 +762,11 @@ public class MainActivity extends AppCompatActivity {
         permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
         permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+             permissions.add(Manifest.permission.READ_MEDIA_IMAGES);
+        } else {
+             permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        }
         ActivityCompat.requestPermissions(this, permissions.toArray(new String[0]), 10);
     }
     
@@ -688,6 +778,11 @@ public class MainActivity extends AppCompatActivity {
         }
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
              if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) missing.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) missing.add(Manifest.permission.READ_MEDIA_IMAGES);
+        } else {
+             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) missing.add(Manifest.permission.READ_EXTERNAL_STORAGE);
         }
         if (!missing.isEmpty()) ActivityCompat.requestPermissions(this, missing.toArray(new String[0]), 11);
     }
