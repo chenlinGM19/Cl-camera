@@ -5,8 +5,13 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PointF;
+import android.graphics.Rect;
+import android.graphics.Typeface;
+
+import androidx.camera.core.ImageProxy;
 
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
@@ -26,15 +31,22 @@ public class ImageUtils {
         NOIR, SILVER, GOLDEN, TEAL_ORANGE, FADED,
         HDR, CINEMATIC
     }
+    
+    public static Bitmap imageProxyToBitmap(ImageProxy image) {
+        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        Bitmap bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+        if (bitmap == null) return null;
+        Matrix matrix = new Matrix();
+        matrix.postRotate(image.getImageInfo().getRotationDegrees());
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+    }
 
-    /**
-     * Heavy processing for final capture (High Res)
-     */
     public static Bitmap processImage(Bitmap original, FilterType filterType, float saturationVal,
                                       int[] lutRGB, int[] lutR, int[] lutG, int[] lutB,
                                       WatermarkConfig wmConfig, boolean cropToSquare) {
         
-        // 1. Crop Logic
         Bitmap workingBitmap = original;
         if (cropToSquare) {
             int w = original.getWidth();
@@ -45,51 +57,111 @@ public class ImageUtils {
             workingBitmap = Bitmap.createBitmap(original, x, y, size, size);
         }
 
-        // Make mutable copy
         Bitmap mutable = workingBitmap.copy(Bitmap.Config.ARGB_8888, true);
-        
-        // 2. Apply Filters & Curves directly to pixels (CPU intensive but accurate)
-        applyFiltersAndCurves(mutable, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
+        applyPreviewEffects(mutable, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
 
-        // 3. Apply Watermark (Canvas drawing)
         if (wmConfig.enabled) {
             if (wmConfig.styleFooter) {
-                // Footer logic
-                int footerHeight = (int) (mutable.getHeight() * 0.12f);
-                int newHeight = mutable.getHeight() + footerHeight;
-                Bitmap framed = Bitmap.createBitmap(mutable.getWidth(), newHeight, Bitmap.Config.ARGB_8888);
-                Canvas c = new Canvas(framed);
-                c.drawColor(wmConfig.backgroundColor);
-                c.drawBitmap(mutable, 0, 0, null);
-                drawWatermark(c, mutable.getWidth(), newHeight, wmConfig, mutable.getHeight());
-                return framed;
+                // Leica Style Footer
+                return addFooterWatermark(mutable, wmConfig);
             } else {
-                // Overlay logic
+                // Overlay
                 Canvas c = new Canvas(mutable);
-                drawWatermark(c, mutable.getWidth(), mutable.getHeight(), wmConfig, -1);
+                drawOverlayWatermark(c, mutable.getWidth(), mutable.getHeight(), wmConfig);
             }
         }
-
         return mutable;
     }
-
-    /**
-     * FAST processing for Real-time Preview. 
-     * Modifies the bitmap in-place. Assumes bitmap is already mutable.
-     */
-    public static void applyPreviewEffects(Bitmap bitmap, FilterType filterType, float saturationVal,
-                                           int[] lutRGB, int[] lutR, int[] lutG, int[] lutB) {
-        applyFiltersAndCurves(bitmap, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
+    
+    private static Bitmap addFooterWatermark(Bitmap src, WatermarkConfig config) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        // Dynamic footer size based on image size (approx 10-12%)
+        int footerH = (int) (Math.max(w, h) * 0.12f);
+        int newH = h + footerH;
+        
+        Bitmap out = Bitmap.createBitmap(w, newH, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        c.drawColor(config.backgroundColor);
+        c.drawBitmap(src, 0, 0, null);
+        
+        Paint pText = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pText.setColor(config.textColor);
+        
+        // Left: Model/Lens (simulated) or Custom Text
+        float fontSizePrimary = footerH * 0.28f;
+        pText.setTextSize(fontSizePrimary);
+        pText.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        
+        String mainText = config.showLogo ? config.customText : "CAMULATOR PRO";
+        float padding = w * 0.05f;
+        float centerY = h + footerH / 2f + fontSizePrimary / 3f;
+        
+        c.drawText(mainText, padding, centerY, pText);
+        
+        // Right: Metadata (Time, Place)
+        Paint pMeta = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pMeta.setColor(Color.GRAY); // Subtler color
+        float fontSizeMeta = footerH * 0.22f;
+        pMeta.setTextSize(fontSizeMeta);
+        pMeta.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL));
+        pMeta.setTextAlign(Paint.Align.RIGHT);
+        
+        StringBuilder meta = new StringBuilder();
+        if (config.showTime) meta.append(new SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).format(new Date()));
+        if (config.showPlace && config.placeName != null && !config.placeName.isEmpty()) {
+            if (meta.length() > 0) meta.append(" | ");
+            meta.append(config.placeName);
+        }
+        // If too long, trim
+        String metaStr = meta.toString();
+        
+        // Separator line
+        Paint pLine = new Paint();
+        pLine.setColor(Color.LTGRAY);
+        pLine.setStrokeWidth(2f);
+        float lineX = w - padding - pMeta.measureText(metaStr) - padding/2;
+        c.drawLine(lineX, h + footerH * 0.3f, lineX, h + footerH * 0.7f, pLine);
+        
+        c.drawText(metaStr, w - padding, centerY, pMeta);
+        
+        return out;
+    }
+    
+    private static void drawOverlayWatermark(Canvas c, int w, int h, WatermarkConfig config) {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(config.textColor);
+        p.setShadowLayer(5f, 2f, 2f, Color.parseColor("#99000000"));
+        
+        float textSize = Math.min(w, h) * 0.035f;
+        if (config.textSize == 0) textSize *= 0.8f;
+        if (config.textSize == 2) textSize *= 1.4f;
+        
+        p.setTextSize(textSize);
+        
+        StringBuilder sb = new StringBuilder();
+        if (config.showLogo) sb.append(config.customText);
+        if (config.showTime) sb.append("  ").append(new SimpleDateFormat("MM.dd", Locale.US).format(new Date()));
+        
+        String text = sb.toString();
+        float tw = p.measureText(text);
+        float padding = w * 0.05f;
+        
+        float x = padding;
+        if (config.position == 1) x = (w - tw) / 2;
+        if (config.position == 2) x = w - padding - tw;
+        
+        c.drawText(text, x, h - padding, p);
     }
 
-    private static void applyFiltersAndCurves(Bitmap bitmap, FilterType filterType, float saturationVal,
-                                              int[] lutRGB, int[] lutR, int[] lutG, int[] lutB) {
+    // High performance integer-based processing
+    public static void applyPreviewEffects(Bitmap bitmap, FilterType filterType, float saturationVal,
+                                           int[] lutRGB, int[] lutR, int[] lutG, int[] lutB) {
         int w = bitmap.getWidth();
         int h = bitmap.getHeight();
         int[] pixels = new int[w * h];
         bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
 
-        // Pre-calculate ColorMatrix array to avoid object creation inside loop
         float[] colorMatrix = null;
         if (filterType != FilterType.NONE || saturationVal != 0) {
             ColorMatrix cm = getFilterMatrix(filterType);
@@ -102,15 +174,17 @@ public class ImageUtils {
             }
             colorMatrix = cm.getArray();
         }
-
-        // Loop pixels
-        // NOTE: For 12MP images this is slow on Java, but user requested Native Java.
-        // For preview (1080p), this is acceptable ~30-50ms.
         
         boolean hasCurves = isCurveActive(lutRGB) || isCurveActive(lutR) || isCurveActive(lutG) || isCurveActive(lutB);
-        boolean hasMatrix = colorMatrix != null;
+        if (colorMatrix == null && !hasCurves) return;
 
-        if (!hasCurves && !hasMatrix) return;
+        // Optimization: Lift loop invariants
+        float m0=0,m1=0,m2=0,m4=0, m5=0,m6=0,m7=0,m9=0, m10=0,m11=0,m12=0,m14=0;
+        if (colorMatrix != null) {
+            m0=colorMatrix[0]; m1=colorMatrix[1]; m2=colorMatrix[2]; m4=colorMatrix[4];
+            m5=colorMatrix[5]; m6=colorMatrix[6]; m7=colorMatrix[7]; m9=colorMatrix[9];
+            m10=colorMatrix[10]; m11=colorMatrix[11]; m12=colorMatrix[12]; m14=colorMatrix[14];
+        }
 
         for (int i = 0; i < pixels.length; i++) {
             int c = pixels[i];
@@ -119,114 +193,24 @@ public class ImageUtils {
             int b = c & 0xFF;
             int a = c & 0xFF000000;
 
-            // 1. Apply Color Matrix
-            if (hasMatrix) {
-                float nr = r * colorMatrix[0] + g * colorMatrix[1] + b * colorMatrix[2] + colorMatrix[4];
-                float ng = r * colorMatrix[5] + g * colorMatrix[6] + b * colorMatrix[7] + colorMatrix[9];
-                float nb = r * colorMatrix[10] + g * colorMatrix[11] + b * colorMatrix[12] + colorMatrix[14];
-                
-                // Clamp
+            if (colorMatrix != null) {
+                float nr = r * m0 + g * m1 + b * m2 + m4;
+                float ng = r * m5 + g * m6 + b * m7 + m9;
+                float nb = r * m10 + g * m11 + b * m12 + m14;
                 r = (nr > 255) ? 255 : (nr < 0) ? 0 : (int) nr;
                 g = (ng > 255) ? 255 : (ng < 0) ? 0 : (int) ng;
                 b = (nb > 255) ? 255 : (nb < 0) ? 0 : (int) nb;
             }
 
-            // 2. Apply Curves
             if (hasCurves) {
                 if (lutRGB != null) { r = lutRGB[r]; g = lutRGB[g]; b = lutRGB[b]; }
                 if (lutR != null) r = lutR[r];
                 if (lutG != null) g = lutG[g];
                 if (lutB != null) b = lutB[b];
             }
-
             pixels[i] = a | (r << 16) | (g << 8) | b;
         }
-
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h);
-    }
-    
-    // --- Watermark & Config Logic ---
-
-    private static void drawWatermark(Canvas canvas, int w, int h, WatermarkConfig config, int footerTopY) {
-        Paint textPaint = new Paint();
-        textPaint.setColor(config.textColor);
-        textPaint.setAntiAlias(true);
-        
-        if (footerTopY == -1) {
-            textPaint.setShadowLayer(4f, 2f, 2f, Color.parseColor("#80000000"));
-        }
-        
-        float baseSize = (footerTopY != -1) ? (h - footerTopY) : h;
-        // Text scaling
-        float scaleFactor = (footerTopY != -1) ? 0.35f : 0.035f; // Default Medium
-        if (config.textSize == 0) scaleFactor *= 0.7f;
-        if (config.textSize == 2) scaleFactor *= 1.4f;
-        
-        float textSize = baseSize * scaleFactor;
-        textPaint.setTextSize(textSize);
-
-        int padding = (int) (w * 0.04f);
-        
-        String primaryText = config.showLogo ? config.customText : "";
-        StringBuilder metaSb = new StringBuilder();
-        boolean hasMeta = false;
-        
-        if (config.showTime) {
-            metaSb.append(new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US).format(new Date()));
-            hasMeta = true;
-        }
-        if (config.showPlace && config.placeName != null && !config.placeName.isEmpty()) {
-            if (hasMeta) metaSb.append(" | ");
-            metaSb.append(config.placeName);
-            hasMeta = true;
-        }
-        if (config.showCoords) {
-            if (hasMeta) metaSb.append(" | ");
-            metaSb.append(config.latLng);
-        }
-        String secondaryText = metaSb.toString();
-
-        float currentY;
-        if (footerTopY != -1) {
-            // Footer Center Logic
-            float footerH = h - footerTopY;
-            float totalH = textSize;
-            if (!secondaryText.isEmpty()) totalH += textSize * 1.3f;
-            currentY = footerTopY + (footerH - totalH) / 2 + textSize * 0.8f; 
-        } else {
-            // Overlay Logic
-            int bottomMargin = (int) (h * 0.05f);
-            float totalH = textSize;
-            if (!secondaryText.isEmpty()) totalH += textSize * 1.3f;
-            currentY = h - bottomMargin - totalH + textSize; 
-        }
-
-        float startX;
-        // Draw Primary
-        if (!primaryText.isEmpty()) {
-            textPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            float txtW = textPaint.measureText(primaryText);
-            
-            if (config.position == 1) startX = (w - txtW) / 2;
-            else if (config.position == 2) startX = w - padding - txtW;
-            else startX = padding;
-            
-            canvas.drawText(primaryText, startX, currentY, textPaint);
-            currentY += textSize * 1.3f;
-        }
-
-        // Draw Secondary
-        if (!secondaryText.isEmpty()) {
-            textPaint.setTextSize(textSize * 0.75f);
-            textPaint.setTypeface(android.graphics.Typeface.MONOSPACE);
-             float txtW = textPaint.measureText(secondaryText);
-            
-            if (config.position == 1) startX = (w - txtW) / 2;
-            else if (config.position == 2) startX = w - padding - txtW;
-            else startX = padding;
-            
-            canvas.drawText(secondaryText, startX, currentY, textPaint);
-        }
     }
     
     private static boolean isCurveActive(int[] lut) {
@@ -238,17 +222,15 @@ public class ImageUtils {
         switch (type) {
             case VIVID: cm.setSaturation(1.4f); break;
             case MATTE: 
-                cm.set(new float[] { 1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0 }); // Reset base
-                // Lift blacks logic would require contrast adjustment
-                cm.setSaturation(0.9f);
+                cm.set(new float[] { 1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0 });
+                cm.setSaturation(0.85f);
                 break;
             case B_W: cm.setSaturation(0); break;
             case SEPIA:
                 cm.set(new float[] { 0.393f, 0.769f, 0.189f, 0, 0, 0.349f, 0.686f, 0.168f, 0, 0, 0.272f, 0.534f, 0.131f, 0, 0, 0, 0, 0, 1, 0 });
                 break;
             case CYBERPUNK:
-                // Boost Magentas and Cyans
-                cm.set(new float[] { 1.2f,0,0,0,0, 0,0.9f,0,0,0, 0,0,1.4f,0,0, 0,0,0,1,0 });
+                cm.set(new float[] { 1.2f,0,0,0,0, 0,0.9f,0,0,0, 0,0,1.3f,0,0, 0,0,0,1,0 });
                 break;
             case WARM: cm.setScale(1.1f, 1.05f, 0.9f, 1); break;
             case COOL: cm.setScale(0.9f, 1.0f, 1.15f, 1); break;
@@ -256,14 +238,13 @@ public class ImageUtils {
                  cm.set(new float[] { 1.1f,0,0,0,0, 0,1.05f,0,0,0, 0,0,0.9f,0,0, 0,0,0,1,0 });
                 break;
             case LEICA_M:
-                // High contrast BW
                  cm.setSaturation(0);
                  ColorMatrix c = new ColorMatrix();
-                 c.set(new float[] { 1.4f,0,0,0,-30, 0,1.4f,0,0,-30, 0,0,1.4f,0,-30, 0,0,0,1,0 });
+                 c.set(new float[] { 1.3f,0,0,0,-20, 0,1.3f,0,0,-20, 0,0,1.3f,0,-20, 0,0,0,1,0 });
                  cm.postConcat(c);
                 break;
             case FUJI_SUPERIA:
-                 cm.set(new float[] { 1.05f, -0.1f, 0, 0, 0, 0, 1.05f, 0, 0, 0, 0, 0, 1.1f, 0, 0, 0, 0, 0, 1, 0 });
+                 cm.set(new float[] { 1.05f, -0.05f, 0, 0, 0, 0, 1.05f, 0, 0, 0, 0, 0, 1.1f, 0, 0, 0, 0, 0, 1, 0 });
                 break;
             case TEAL_ORANGE:
                 cm.set(new float[] { 1.1f,0,0,0,0, 0,1.0f,0,0,0, 0,0,0.8f,0,0, 0,0,0,1,0 });
@@ -271,6 +252,28 @@ public class ImageUtils {
             default: break;
         }
         return cm;
+    }
+    
+    // Config classes remain same, implements Cloneable for thread safety
+    public static class WatermarkConfig implements Cloneable {
+        public boolean enabled = true;
+        public boolean styleFooter = true;
+        public int backgroundColor = Color.WHITE;
+        public int textColor = Color.BLACK;
+        public boolean showLogo = true;
+        public String customText = "CAMULATOR";
+        public boolean showTime = true;
+        public boolean showCoords = false;
+        public boolean showPlace = true;
+        public String latLng = "";
+        public String placeName = "";
+        public int textSize = 1; 
+        public int position = 0; 
+        
+        @Override
+        public WatermarkConfig clone() {
+            try { return (WatermarkConfig) super.clone(); } catch (CloneNotSupportedException e) { return new WatermarkConfig(); }
+        }
     }
 
     public static class CurvePreset {
@@ -337,21 +340,5 @@ public class ImageUtils {
             }
             sb.append("</rdf:Seq>\n</crs:").append(tagName).append(">\n");
         }
-    }
-
-    public static class WatermarkConfig {
-        public boolean enabled = true;
-        public boolean styleFooter = true;
-        public int backgroundColor = Color.WHITE;
-        public int textColor = Color.BLACK;
-        public boolean showLogo = true;
-        public String customText = "CAMULATOR";
-        public boolean showTime = true;
-        public boolean showCoords = true;
-        public boolean showPlace = false;
-        public String latLng = "";
-        public String placeName = "";
-        public int textSize = 1; 
-        public int position = 0; 
     }
 }
