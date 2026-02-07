@@ -3,17 +3,21 @@ package com.camulator.pro;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ContentValues;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.PointF;
 import android.hardware.camera2.CameraCharacteristics;
 import android.location.Address;
 import android.location.Geocoder;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.SizeF;
 import android.view.View;
 import android.widget.Button;
@@ -25,6 +29,7 @@ import android.widget.Switch;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
 import androidx.camera.core.AspectRatio;
@@ -84,17 +89,17 @@ public class MainActivity extends AppCompatActivity {
         focalLengthContainer = findViewById(R.id.focalLengthContainer);
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
-        if (isCameraPermissionGranted()) {
-            startCamera();
-            checkAndRequestOptionalPermissions();
-        } else {
-            requestPermissions();
-        }
-
         setupControls();
         setupFocalLengthButtons();
         cameraExecutor = Executors.newSingleThreadExecutor();
-        updateLocation();
+
+        if (isCameraPermissionGranted()) {
+            startCamera();
+            checkAndRequestOptionalPermissions();
+            updateLocation();
+        } else {
+            requestPermissions();
+        }
     }
 
     private void setupControls() {
@@ -311,30 +316,52 @@ public class MainActivity extends AppCompatActivity {
     private void takePhoto() {
         if (imageCapture == null) return;
 
+        // CRITICAL: Capture curve points on the UI thread to ensure thread safety
+        List<PointF> currentCurvePoints = new ArrayList<>();
+        if (curveView != null && curveView.getPoints() != null) {
+            for(PointF p : curveView.getPoints()) {
+                currentCurvePoints.add(new PointF(p.x, p.y));
+            }
+        }
+
         imageCapture.takePicture(ContextCompat.getMainExecutor(this), new ImageCapture.OnImageCapturedCallback() {
             @Override
             public void onCaptureSuccess(@NonNull ImageProxy image) {
                 Bitmap bitmap = imageProxyToBitmap(image);
                 image.close();
+                
+                if (bitmap == null) {
+                    Toast.makeText(MainActivity.this, "Image Capture Error", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
                 cameraExecutor.execute(() -> {
-                    Bitmap processed = ImageUtils.processImage(bitmap, currentFilter, curveView.getPoints(), wmConfig);
-                    saveImage(processed);
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Saved to Gallery", Toast.LENGTH_SHORT).show());
+                    try {
+                        Bitmap processed = ImageUtils.processImage(bitmap, currentFilter, currentCurvePoints, wmConfig);
+                        saveImage(processed);
+                        runOnUiThread(() -> Toast.makeText(MainActivity.this, "Saved to Gallery", Toast.LENGTH_SHORT).show());
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        runOnUiThread(() -> Toast.makeText(MainActivity.this, "Processing Error", Toast.LENGTH_SHORT).show());
+                    }
                 });
             }
 
             @Override
             public void onError(@NonNull ImageCaptureException exception) {
-                Toast.makeText(MainActivity.this, "Capture Failed", Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "Capture Failed: " + exception.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
     }
 
     private Bitmap imageProxyToBitmap(ImageProxy image) {
+        if (image.getPlanes() == null || image.getPlanes().length == 0) return null;
         ByteBuffer buffer = image.getPlanes()[0].getBuffer();
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+        
+        if (bitmap == null) return null;
         
         Matrix matrix = new Matrix();
         matrix.postRotate(image.getImageInfo().getRotationDegrees());
@@ -353,8 +380,10 @@ public class MainActivity extends AppCompatActivity {
             OutputStream stream = getContentResolver().openOutputStream(
                     getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
             );
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream);
-            if (stream != null) stream.close();
+            if (stream != null) {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream);
+                stream.close();
+            }
         } catch (Exception e) {
             e.printStackTrace();
             runOnUiThread(() -> Toast.makeText(this, "Error Saving Image", Toast.LENGTH_SHORT).show());
@@ -367,7 +396,6 @@ public class MainActivity extends AppCompatActivity {
                 if (location != null) {
                     wmConfig.latLng = String.format(Locale.US, "%.4f, %.4f", location.getLatitude(), location.getLongitude());
                     
-                    // Geocoding in background
                     cameraExecutor.execute(() -> {
                         Geocoder geocoder = new Geocoder(MainActivity.this, Locale.getDefault());
                         try {
@@ -396,7 +424,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // Permission Handling Logic
+    // --- Permission Handling ---
     
     private boolean isCameraPermissionGranted() {
         return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
@@ -435,18 +463,36 @@ public class MainActivity extends AppCompatActivity {
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         
-        // Request Code 10: Initial Startup (must include Camera)
         if (requestCode == 10) {
             if (isCameraPermissionGranted()) {
                 startCamera();
                 updateLocation();
             } else {
-                Toast.makeText(this, "Camera permission is required to use this app.", Toast.LENGTH_LONG).show();
-                finish();
+                // If the user denied without checking "Don't ask again", rationale is true.
+                // If "Don't ask again" is checked, rationale is false, and we must send them to settings.
+                boolean showRationale = ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.CAMERA);
+                
+                if (!showRationale) {
+                    new AlertDialog.Builder(this)
+                        .setTitle("Camera Permission Required")
+                        .setMessage("Camera access is required to take photos. Please enable it in Settings.")
+                        .setPositiveButton("Settings", (dialog, which) -> {
+                            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                            Uri uri = Uri.fromParts("package", getPackageName(), null);
+                            intent.setData(uri);
+                            startActivity(intent);
+                            finish();
+                        })
+                        .setNegativeButton("Cancel", (dialog, which) -> finish())
+                        .setCancelable(false)
+                        .show();
+                } else {
+                    Toast.makeText(this, "Camera permission is required.", Toast.LENGTH_LONG).show();
+                    finish();
+                }
             }
         }
         
-        // Request Code 11: Optional Permissions update
         if (requestCode == 11) {
             updateLocation();
         }
