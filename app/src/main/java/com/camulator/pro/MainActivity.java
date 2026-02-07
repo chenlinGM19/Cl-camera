@@ -48,6 +48,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
@@ -83,10 +84,11 @@ public class MainActivity extends AppCompatActivity {
         focalLengthContainer = findViewById(R.id.focalLengthContainer);
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
-        if (allPermissionsGranted()) {
+        if (isCameraPermissionGranted()) {
             startCamera();
+            checkAndRequestOptionalPermissions();
         } else {
-            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, 10);
+            requestPermissions();
         }
 
         setupControls();
@@ -372,7 +374,6 @@ public class MainActivity extends AppCompatActivity {
                             List<Address> addresses = geocoder.getFromLocation(location.getLatitude(), location.getLongitude(), 1);
                             if (addresses != null && !addresses.isEmpty()) {
                                 Address addr = addresses.get(0);
-                                // Try to get Locality (City) or Admin Area (State)
                                 String place = addr.getLocality();
                                 if (place == null) place = addr.getSubAdminArea();
                                 if (place == null) place = addr.getAdminArea();
@@ -395,33 +396,59 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private static final String[] REQUIRED_PERMISSIONS = new String[]{
-            Manifest.permission.CAMERA, 
-            Manifest.permission.WRITE_EXTERNAL_STORAGE, 
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION // Added coarse for good measure
-    };
+    // Permission Handling Logic
+    
+    private boolean isCameraPermissionGranted() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
 
-    private boolean allPermissionsGranted() {
-        for (String permission : REQUIRED_PERMISSIONS) {
-            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-                return false;
-            }
+    private void requestPermissions() {
+        List<String> permissions = new ArrayList<>();
+        permissions.add(Manifest.permission.CAMERA);
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
         }
-        return true;
+        
+        ActivityCompat.requestPermissions(this, permissions.toArray(new String[0]), 10);
+    }
+    
+    private void checkAndRequestOptionalPermissions() {
+        List<String> missing = new ArrayList<>();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            missing.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        }
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+             }
+        }
+        
+        if (!missing.isEmpty()) {
+            ActivityCompat.requestPermissions(this, missing.toArray(new String[0]), 11);
+        }
     }
     
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        
+        // Request Code 10: Initial Startup (must include Camera)
         if (requestCode == 10) {
-            if (allPermissionsGranted()) {
+            if (isCameraPermissionGranted()) {
                 startCamera();
                 updateLocation();
             } else {
-                Toast.makeText(this, "Permissions not granted.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Camera permission is required to use this app.", Toast.LENGTH_LONG).show();
                 finish();
             }
+        }
+        
+        // Request Code 11: Optional Permissions update
+        if (requestCode == 11) {
+            updateLocation();
         }
     }
 }
