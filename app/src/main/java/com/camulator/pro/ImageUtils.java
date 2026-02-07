@@ -33,14 +33,19 @@ public class ImageUtils {
     }
     
     public static Bitmap imageProxyToBitmap(ImageProxy image) {
-        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-        byte[] bytes = new byte[buffer.remaining()];
-        buffer.get(bytes);
-        Bitmap bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-        if (bitmap == null) return null;
-        Matrix matrix = new Matrix();
-        matrix.postRotate(image.getImageInfo().getRotationDegrees());
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+        try {
+            ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+            buffer.rewind();
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            Bitmap bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (bitmap == null) return null;
+            Matrix matrix = new Matrix();
+            matrix.postRotate(image.getImageInfo().getRotationDegrees());
+            return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public static Bitmap processImage(Bitmap original, FilterType filterType, float saturationVal,
@@ -58,7 +63,8 @@ public class ImageUtils {
         }
 
         Bitmap mutable = workingBitmap.copy(Bitmap.Config.ARGB_8888, true);
-        applyPreviewEffects(mutable, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
+        // Use standard method for single-shot (allocates internally, acceptable for single capture)
+        applyPreviewEffects(mutable, null, filterType, saturationVal, lutRGB, lutR, lutG, lutB);
 
         if (wmConfig.enabled) {
             if (wmConfig.styleFooter) {
@@ -154,12 +160,17 @@ public class ImageUtils {
         c.drawText(text, x, h - padding, p);
     }
 
-    // High performance integer-based processing
-    public static void applyPreviewEffects(Bitmap bitmap, FilterType filterType, float saturationVal,
+    // Updated: Accepts reusable buffer to avoid GC churn
+    public static void applyPreviewEffects(Bitmap bitmap, int[] reusableBuffer, FilterType filterType, float saturationVal,
                                            int[] lutRGB, int[] lutR, int[] lutG, int[] lutB) {
         int w = bitmap.getWidth();
         int h = bitmap.getHeight();
-        int[] pixels = new int[w * h];
+        
+        int[] pixels = reusableBuffer;
+        if (pixels == null || pixels.length < w * h) {
+            pixels = new int[w * h];
+        }
+        
         bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
 
         float[] colorMatrix = null;
@@ -176,6 +187,12 @@ public class ImageUtils {
         }
         
         boolean hasCurves = isCurveActive(lutRGB) || isCurveActive(lutR) || isCurveActive(lutG) || isCurveActive(lutB);
+        
+        // If no effects, we can return early, but we already read pixels. 
+        // If we were passed a buffer for the purpose of *reading* then writing back, we just continue.
+        // But getPixels/setPixels is expensive. If no effect, we shouldn't have called this? 
+        // We assume caller calls this to Apply effects.
+        
         if (colorMatrix == null && !hasCurves) return;
 
         // Optimization: Lift loop invariants
@@ -186,7 +203,8 @@ public class ImageUtils {
             m10=colorMatrix[10]; m11=colorMatrix[11]; m12=colorMatrix[12]; m14=colorMatrix[14];
         }
 
-        for (int i = 0; i < pixels.length; i++) {
+        int len = w * h;
+        for (int i = 0; i < len; i++) {
             int c = pixels[i];
             int r = (c >> 16) & 0xFF;
             int g = (c >> 8) & 0xFF;
@@ -197,6 +215,8 @@ public class ImageUtils {
                 float nr = r * m0 + g * m1 + b * m2 + m4;
                 float ng = r * m5 + g * m6 + b * m7 + m9;
                 float nb = r * m10 + g * m11 + b * m12 + m14;
+                
+                // Fast clamping
                 r = (nr > 255) ? 255 : (nr < 0) ? 0 : (int) nr;
                 g = (ng > 255) ? 255 : (ng < 0) ? 0 : (int) ng;
                 b = (nb > 255) ? 255 : (nb < 0) ? 0 : (int) nb;
