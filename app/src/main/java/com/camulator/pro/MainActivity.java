@@ -9,6 +9,8 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.hardware.camera2.CameraCharacteristics;
+import android.location.Address;
+import android.location.Geocoder;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
@@ -43,8 +45,10 @@ import com.google.android.gms.location.LocationServices;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.common.util.concurrent.ListenableFuture;
 
+import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -64,13 +68,8 @@ public class MainActivity extends AppCompatActivity {
     private ImageUtils.WatermarkConfig wmConfig = new ImageUtils.WatermarkConfig();
     private int currentAspectRatio = AspectRatio.RATIO_4_3;
 
-    // Standard Full Frame Diagonal ~43.27mm (sqrt(36^2 + 24^2))
     private static final float FULL_FRAME_DIAGONAL = 43.2666f;
-    
-    // Default fallback if calculation fails
     private float baseEquivalentFocalLength = 24.0f; 
-    
-    // Classic Focal Lengths
     private static final int[] FOCAL_LENGTHS = {16, 24, 28, 35, 50, 75, 85, 105, 135};
     private int selectedFocalLength = 24;
 
@@ -91,7 +90,6 @@ public class MainActivity extends AppCompatActivity {
         }
 
         setupControls();
-        // Initialize buttons with default look
         setupFocalLengthButtons();
         cameraExecutor = Executors.newSingleThreadExecutor();
         updateLocation();
@@ -150,19 +148,28 @@ public class MainActivity extends AppCompatActivity {
         EditText etText = dialog.findViewById(R.id.etCustomText);
         Switch swTime = dialog.findViewById(R.id.swShowTime);
         Switch swCoords = dialog.findViewById(R.id.swShowCoords);
+        Switch swPlace = dialog.findViewById(R.id.swShowPlace);
         RadioGroup rgSize = dialog.findViewById(R.id.rgTextSize);
+        RadioGroup rgPos = dialog.findViewById(R.id.rgPosition);
 
-        if (swEnabled != null && swLogo != null && etText != null && swTime != null && swCoords != null && rgSize != null) {
+        if (swEnabled != null) {
             swEnabled.setChecked(wmConfig.enabled);
             swLogo.setChecked(wmConfig.showLogo);
             etText.setText(wmConfig.customText);
             swTime.setChecked(wmConfig.showTime);
             swCoords.setChecked(wmConfig.showCoords);
+            swPlace.setChecked(wmConfig.showPlace);
 
             switch (wmConfig.textSize) {
                 case 0: rgSize.check(R.id.rbSmall); break;
                 case 1: rgSize.check(R.id.rbMedium); break;
                 case 2: rgSize.check(R.id.rbLarge); break;
+            }
+            
+            switch (wmConfig.position) {
+                case 0: rgPos.check(R.id.rbPosLeft); break;
+                case 1: rgPos.check(R.id.rbPosCenter); break;
+                case 2: rgPos.check(R.id.rbPosRight); break;
             }
 
             dialog.setOnDismissListener(d -> {
@@ -171,13 +178,24 @@ public class MainActivity extends AppCompatActivity {
                 wmConfig.customText = etText.getText().toString();
                 wmConfig.showTime = swTime.isChecked();
                 wmConfig.showCoords = swCoords.isChecked();
+                wmConfig.showPlace = swPlace.isChecked();
 
                 int selectedId = rgSize.getCheckedRadioButtonId();
                 if (selectedId == R.id.rbSmall) wmConfig.textSize = 0;
                 else if (selectedId == R.id.rbMedium) wmConfig.textSize = 1;
                 else if (selectedId == R.id.rbLarge) wmConfig.textSize = 2;
                 
-                Toast.makeText(this, "Watermark settings saved", Toast.LENGTH_SHORT).show();
+                int posId = rgPos.getCheckedRadioButtonId();
+                if (posId == R.id.rbPosLeft) wmConfig.position = 0;
+                else if (posId == R.id.rbPosCenter) wmConfig.position = 1;
+                else if (posId == R.id.rbPosRight) wmConfig.position = 2;
+                
+                if (wmConfig.showPlace && (wmConfig.placeName == null || wmConfig.placeName.isEmpty())) {
+                    // Trigger update if enabled but empty
+                    updateLocation();
+                }
+
+                Toast.makeText(this, "Settings Saved", Toast.LENGTH_SHORT).show();
             });
         }
 
@@ -211,7 +229,6 @@ public class MainActivity extends AppCompatActivity {
             Button btn = (Button) focalLengthContainer.getChildAt(i);
             int fl = FOCAL_LENGTHS[i];
             
-            // Highlight selected
             if (fl == selectedFocalLength) {
                 btn.setTextColor(Color.YELLOW);
                 btn.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -228,11 +245,7 @@ public class MainActivity extends AppCompatActivity {
         ZoomState zoomState = camera.getCameraInfo().getZoomState().getValue();
         if (zoomState == null) return;
 
-        // Formula: Zoom Ratio = Target Equivalent / Base Equivalent
         float targetRatio = targetEquivalentMm / baseEquivalentFocalLength;
-        
-        // Clamp to device capabilities
-        // Note: minZoomRatio might be < 1.0 if the device has an ultra-wide lens exposed
         float min = zoomState.getMinZoomRatio();
         float max = zoomState.getMaxZoomRatio();
         
@@ -263,10 +276,7 @@ public class MainActivity extends AppCompatActivity {
                 cameraProvider.unbindAll();
                 camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture);
 
-                // Calculate base focal length after binding
                 calculateBaseFocalLength();
-
-                // Apply initial focal length
                 applyFocalLengthZoom(selectedFocalLength);
 
             } catch (ExecutionException | InterruptedException e) {
@@ -280,25 +290,17 @@ public class MainActivity extends AppCompatActivity {
         try {
             Camera2CameraInfo camera2Info = Camera2CameraInfo.from(camera.getCameraInfo());
             
-            // 1. Get Physical Sensor Size
             SizeF sensorSize = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
-            
-            // 2. Get Physical Focal Length (usually index 0 is the main/widest on single-lens logical cams)
             float[] focalLengths = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
             
             if (sensorSize != null && focalLengths != null && focalLengths.length > 0) {
                 float w = sensorSize.getWidth();
                 float h = sensorSize.getHeight();
                 float sensorDiagonal = (float) Math.sqrt(w * w + h * h);
-                
-                // 3. Calculate Crop Factor
                 float cropFactor = FULL_FRAME_DIAGONAL / sensorDiagonal;
-                
-                // 4. Calculate Equivalent Focal Length
                 baseEquivalentFocalLength = focalLengths[0] * cropFactor;
             }
         } catch (Exception e) {
-            // Fallback to 24mm if Camera2 info is inaccessible
             baseEquivalentFocalLength = 24.0f;
             e.printStackTrace();
         }
@@ -312,7 +314,6 @@ public class MainActivity extends AppCompatActivity {
             public void onCaptureSuccess(@NonNull ImageProxy image) {
                 Bitmap bitmap = imageProxyToBitmap(image);
                 image.close();
-                // Process in background to avoid blocking UI
                 cameraExecutor.execute(() -> {
                     Bitmap processed = ImageUtils.processImage(bitmap, currentFilter, curveView.getPoints(), wmConfig);
                     saveImage(processed);
@@ -363,12 +364,43 @@ public class MainActivity extends AppCompatActivity {
             fusedLocationClient.getLastLocation().addOnSuccessListener(this, location -> {
                 if (location != null) {
                     wmConfig.latLng = String.format(Locale.US, "%.4f, %.4f", location.getLatitude(), location.getLongitude());
+                    
+                    // Geocoding in background
+                    cameraExecutor.execute(() -> {
+                        Geocoder geocoder = new Geocoder(MainActivity.this, Locale.getDefault());
+                        try {
+                            List<Address> addresses = geocoder.getFromLocation(location.getLatitude(), location.getLongitude(), 1);
+                            if (addresses != null && !addresses.isEmpty()) {
+                                Address addr = addresses.get(0);
+                                // Try to get Locality (City) or Admin Area (State)
+                                String place = addr.getLocality();
+                                if (place == null) place = addr.getSubAdminArea();
+                                if (place == null) place = addr.getAdminArea();
+                                
+                                String country = addr.getCountryName();
+                                if (place != null && country != null) {
+                                    wmConfig.placeName = place + ", " + country;
+                                } else if (country != null) {
+                                    wmConfig.placeName = country;
+                                } else {
+                                    wmConfig.placeName = place;
+                                }
+                            }
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    });
                 }
             });
         }
     }
 
-    private static final String[] REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.ACCESS_FINE_LOCATION};
+    private static final String[] REQUIRED_PERMISSIONS = new String[]{
+            Manifest.permission.CAMERA, 
+            Manifest.permission.WRITE_EXTERNAL_STORAGE, 
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION // Added coarse for good measure
+    };
 
     private boolean allPermissionsGranted() {
         for (String permission : REQUIRED_PERMISSIONS) {
