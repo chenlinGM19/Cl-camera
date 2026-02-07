@@ -1,17 +1,26 @@
 package com.camulator.pro;
 
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.widget.ImageView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
+import java.io.InputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 public class ImageViewerActivity extends AppCompatActivity {
 
     private Uri imageUri;
+    private ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -22,7 +31,22 @@ public class ImageViewerActivity extends AppCompatActivity {
         imageUri = getIntent().getData();
 
         if (imageUri != null) {
-            ivFull.setImageURI(imageUri);
+            // Load large image in background
+            executor.execute(() -> {
+                try {
+                    InputStream is = getContentResolver().openInputStream(imageUri);
+                    Bitmap bmp = BitmapFactory.decodeStream(is);
+                    if (is != null) is.close();
+                    
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                         if (!isDestroyed() && !isFinishing()) {
+                             ivFull.setImageBitmap(bmp);
+                         }
+                    });
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
         }
 
         findViewById(R.id.btnBack).setOnClickListener(v -> finish());
@@ -37,6 +61,12 @@ public class ImageViewerActivity extends AppCompatActivity {
         });
 
         findViewById(R.id.btnDelete).setOnClickListener(v -> confirmDelete());
+    }
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executor.shutdown();
     }
 
     private void confirmDelete() {

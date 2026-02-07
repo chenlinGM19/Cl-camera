@@ -123,10 +123,11 @@ public class CurveView extends View {
         notifyListener();
     }
 
-    public int[] getLutRGB() { return generateLUT(pointsRGB); }
-    public int[] getLutR() { return generateLUT(pointsR); }
-    public int[] getLutG() { return generateLUT(pointsG); }
-    public int[] getLutB() { return generateLUT(pointsB); }
+    // Only returns the curve component LUT. Slider adjustments are handled in ImageUtils.
+    public int[] getLutRGB() { return ImageUtils.generateLUT(pointsRGB); }
+    public int[] getLutR() { return ImageUtils.generateLUT(pointsR); }
+    public int[] getLutG() { return ImageUtils.generateLUT(pointsG); }
+    public int[] getLutB() { return ImageUtils.generateLUT(pointsB); }
 
     @Override
     protected void onDraw(Canvas canvas) {
@@ -161,14 +162,16 @@ public class CurveView extends View {
             Path path = new Path();
             Path fillPath = new Path();
             
-            int[] lut = generateLUT(points);
+            // Use high-resolution interpolation for drawing to match the underlying math
+            int[] lut = ImageUtils.generateLUT(points);
             
             float startY = h - (lut[0] / 255f * h);
             path.moveTo(0, startY);
             fillPath.moveTo(0, h);
             fillPath.lineTo(0, startY);
             
-            for (int i = 0; i < 256; i+=4) { // stride 4 for perf
+            // Draw smooth path based on LUT
+            for (int i = 2; i < 256; i+=2) {
                 float x = (i / 255f) * w;
                 float y = h - (lut[i] / 255f * h);
                 path.lineTo(x, y);
@@ -247,36 +250,5 @@ public class CurveView extends View {
                 break;
         }
         return true;
-    }
-    
-    private int[] generateLUT(List<PointF> knots) {
-        int[] lut = new int[256];
-        if (knots.size() < 2) return lut;
-
-        int n = knots.size();
-        float[] x = new float[n];
-        float[] y = new float[n];
-        
-        for(int i=0; i<n; i++) {
-            x[i] = knots.get(i).x * 255f;
-            y[i] = (1f - knots.get(i).y) * 255f;
-        }
-        
-        for (int i = 0; i < 256; i++) {
-            lut[i] = (int) Math.max(0, Math.min(255, interpolate(i, x, y)));
-        }
-        return lut;
-    }
-
-    private float interpolate(float val, float[] x, float[] y) {
-        int n = x.length;
-        if (val <= x[0]) return y[0];
-        if (val >= x[n-1]) return y[n-1];
-        
-        int i = 0;
-        while (val > x[i+1]) i++;
-        
-        float t = (val - x[i]) / (x[i+1] - x[i]);
-        return y[i] + t * (y[i+1] - y[i]); 
     }
 }

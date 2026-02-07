@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
 import android.location.Address;
 import android.location.Geocoder;
 import android.net.Uri;
@@ -20,7 +21,6 @@ import android.provider.MediaStore;
 import android.util.Log;
 import android.util.Size;
 import android.view.View;
-import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -49,6 +49,7 @@ import androidx.camera.core.Preview;
 import androidx.camera.core.ZoomState;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
+import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
@@ -80,21 +81,22 @@ public class MainActivity extends AppCompatActivity {
     private ImageView ivPreviewOverlay;
     private View vShutterFlash; 
     private CurveView curveView;
-    private View presetEditorContainer, controlsContainer;
+    private ConstraintLayout previewContainer, presetEditorContainer;
+    private View controlsContainer;
     private View maskTop, maskBottom;
-    private LinearLayout focalLengthContainer, filterContainer, llPresetList;
+    private LinearLayout focalLengthContainer, llPresetList;
     private Button btnRatio;
-    private SeekBar sbSaturation;
     private ImageView ivLastImage;
+
+    // Tone & Grade Controls
+    private SeekBar sbSaturation, sbHighlights, sbShadows, sbWhites, sbBlacks, sbMidtones;
+    private SeekBar sbShadowHue, sbShadowSat, sbHighlightHue, sbHighlightSat;
 
     private FusedLocationProviderClient fusedLocationClient;
     private Camera camera;
     private Vibrator vibrator;
 
-    private ImageUtils.FilterType currentFilter = ImageUtils.FilterType.NONE;
-    private float currentSaturation = 0f;
     private ImageUtils.WatermarkConfig wmConfig = new ImageUtils.WatermarkConfig();
-    
     private List<ImageUtils.CurvePreset> loadedPresets = new ArrayList<>();
     private ImageUtils.CurvePreset currentPreset = new ImageUtils.CurvePreset();
     
@@ -116,23 +118,23 @@ public class MainActivity extends AppCompatActivity {
     
     private ActivityResultLauncher<Intent> exportLauncher;
     private ActivityResultLauncher<Intent> importLauncher;
+    
+    // Cache for heavy calculations
+    private int[][] cachedMasterLUTs;
+    private float[] cachedColorMatrix;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
         try {
-            // Immersive Full Screen - standard layout flags only
             getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
-            
-            // Note: WindowInsetsController code removed to prevent crashes on some Android 11+ devices.
-            // The theme 'Theme.CamulatorPro.Fullscreen' handles hiding the status bar implicitly.
-            
             setContentView(R.layout.activity_main);
 
             // Bind Views
             viewFinder = findViewById(R.id.viewFinder);
             ivPreviewOverlay = findViewById(R.id.ivPreviewOverlay);
+            previewContainer = findViewById(R.id.previewContainer);
             vShutterFlash = findViewById(R.id.vShutterFlash);
             curveView = findViewById(R.id.curveView);
             presetEditorContainer = findViewById(R.id.presetEditorContainer);
@@ -140,24 +142,31 @@ public class MainActivity extends AppCompatActivity {
             maskTop = findViewById(R.id.maskTop);
             maskBottom = findViewById(R.id.maskBottom);
             focalLengthContainer = findViewById(R.id.focalLengthContainer);
-            filterContainer = findViewById(R.id.filterContainer);
             llPresetList = findViewById(R.id.llPresetList);
             btnRatio = findViewById(R.id.btnRatio);
-            sbSaturation = findViewById(R.id.sbSaturation);
             ivLastImage = findViewById(R.id.ivLastImage);
+            
+            // Bind New Sliders
+            sbSaturation = findViewById(R.id.sbSaturation);
+            sbHighlights = findViewById(R.id.sbHighlights);
+            sbShadows = findViewById(R.id.sbShadows);
+            sbWhites = findViewById(R.id.sbWhites);
+            sbBlacks = findViewById(R.id.sbBlacks);
+            sbMidtones = findViewById(R.id.sbMidtones);
+            sbShadowHue = findViewById(R.id.sbShadowHue);
+            sbShadowSat = findViewById(R.id.sbShadowSat);
+            sbHighlightHue = findViewById(R.id.sbHighlightHue);
+            sbHighlightSat = findViewById(R.id.sbHighlightSat);
             
             try {
                 vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-            } catch (Exception e) {
-                // Ignore if service not available
-            }
+            } catch (Exception e) {}
             
             fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
             if (curveView != null) {
-                curveView.setOnCurveChangeListener(this::triggerPreviewUpdate);
+                curveView.setOnCurveChangeListener(this::updatePresetFromUI);
             }
 
-            // Ensure viewFinder is part of layout but invisible for our custom overlay
             if (viewFinder != null) {
                 viewFinder.setVisibility(View.VISIBLE);
                 viewFinder.setAlpha(0f);
@@ -165,13 +174,15 @@ public class MainActivity extends AppCompatActivity {
 
             loadDefaultPresets();
             setupControls();
+            setupSliderListeners();
             setupFocalLengthButtons();
-            setupFilterButtons();
             refreshPresetListUI();
             setupImportExport();
             cameraExecutor = Executors.newSingleThreadExecutor();
+            
+            // Pre-calculate initial LUTs and Matrix
+            updatePresetFromUI();
 
-            // Delay camera start slightly to ensure layout is ready
             if (ivPreviewOverlay != null) {
                 ivPreviewOverlay.post(() -> {
                     try {
@@ -182,17 +193,12 @@ public class MainActivity extends AppCompatActivity {
                         } else {
                             requestPermissions();
                         }
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    } catch (Exception e) {}
                 });
             }
 
         } catch (Exception e) {
             e.printStackTrace();
-            try {
-                Toast.makeText(getApplicationContext(), "Error initializing app: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            } catch (Exception ignored) {}
         }
     }
     
@@ -213,9 +219,86 @@ public class MainActivity extends AppCompatActivity {
                     vibrator.vibrate(20);
                 }
             }
-        } catch (Exception e) {
-            // Ignore haptic errors
+        } catch (Exception e) {}
+    }
+
+    private void setupSliderListeners() {
+        SeekBar.OnSeekBarChangeListener listener = new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser) updatePresetFromUI();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        };
+
+        sbSaturation.setOnSeekBarChangeListener(listener);
+        sbHighlights.setOnSeekBarChangeListener(listener);
+        sbShadows.setOnSeekBarChangeListener(listener);
+        sbWhites.setOnSeekBarChangeListener(listener);
+        sbBlacks.setOnSeekBarChangeListener(listener);
+        sbMidtones.setOnSeekBarChangeListener(listener);
+        sbShadowHue.setOnSeekBarChangeListener(listener);
+        sbShadowSat.setOnSeekBarChangeListener(listener);
+        sbHighlightHue.setOnSeekBarChangeListener(listener);
+        sbHighlightSat.setOnSeekBarChangeListener(listener);
+    }
+
+    private void updatePresetFromUI() {
+        if (curveView == null) return;
+        currentPreset.rgb = curveView.getPoints(CurveView.Channel.RGB);
+        currentPreset.r = curveView.getPoints(CurveView.Channel.RED);
+        currentPreset.g = curveView.getPoints(CurveView.Channel.GREEN);
+        currentPreset.b = curveView.getPoints(CurveView.Channel.BLUE);
+
+        currentPreset.saturation = sbSaturation.getProgress() - 100;
+        currentPreset.highlights = sbHighlights.getProgress() - 100;
+        currentPreset.shadows = sbShadows.getProgress() - 100;
+        currentPreset.whites = sbWhites.getProgress() - 100;
+        currentPreset.black = sbBlacks.getProgress() - 100;
+        currentPreset.midtones = sbMidtones.getProgress() - 100;
+        
+        currentPreset.shadowHue = sbShadowHue.getProgress();
+        currentPreset.shadowSat = sbShadowSat.getProgress();
+        currentPreset.highlightHue = sbHighlightHue.getProgress();
+        currentPreset.highlightSat = sbHighlightSat.getProgress();
+        
+        // Regenerate Caches immediately
+        cachedMasterLUTs = ImageUtils.generateMasterLUTs(currentPreset);
+        
+        if (currentPreset.saturation != 0) {
+            ColorMatrix cm = new ColorMatrix();
+            float satScale = 1.0f + (currentPreset.saturation / 100f);
+            if (satScale < 0) satScale = 0;
+            cm.setSaturation(satScale);
+            cachedColorMatrix = cm.getArray();
+        } else {
+            cachedColorMatrix = null;
         }
+        
+        if (isFrozen) triggerPreviewUpdate();
+    }
+    
+    private void updateUIFromPreset() {
+        if (curveView != null) {
+            curveView.setPoints(CurveView.Channel.RGB, currentPreset.rgb);
+            curveView.setPoints(CurveView.Channel.RED, currentPreset.r);
+            curveView.setPoints(CurveView.Channel.GREEN, currentPreset.g);
+            curveView.setPoints(CurveView.Channel.BLUE, currentPreset.b);
+        }
+        sbSaturation.setProgress((int)currentPreset.saturation + 100);
+        sbHighlights.setProgress((int)currentPreset.highlights + 100);
+        sbShadows.setProgress((int)currentPreset.shadows + 100);
+        sbWhites.setProgress((int)currentPreset.whites + 100);
+        sbBlacks.setProgress((int)currentPreset.black + 100);
+        sbMidtones.setProgress((int)currentPreset.midtones + 100);
+        
+        sbShadowHue.setProgress((int)currentPreset.shadowHue);
+        sbShadowSat.setProgress((int)currentPreset.shadowSat);
+        sbHighlightHue.setProgress((int)currentPreset.highlightHue);
+        sbHighlightSat.setProgress((int)currentPreset.highlightSat);
+        
+        updatePresetFromUI();
     }
 
     private void startCamera() {
@@ -228,22 +311,27 @@ public class MainActivity extends AppCompatActivity {
                 
                 int targetRatio = (aspectRatioMode == 1) ? AspectRatio.RATIO_16_9 : AspectRatio.RATIO_4_3;
 
-                // 1. Preview
-                Preview preview = new Preview.Builder()
-                        .setTargetAspectRatio(targetRatio)
-                        .build();
+                // 1. Preview (High Res Surface for internal use if needed, though we hide it)
+                Preview preview = new Preview.Builder().setTargetAspectRatio(targetRatio).build();
                 preview.setSurfaceProvider(viewFinder.getSurfaceProvider());
+                
+                // Consistency Match: 4:3 uses ~960x720, 16:9 uses ~1280x720
+                // This ensures FOV is similar to final capture
+                Size targetResolution;
+                if (aspectRatioMode == 1) {
+                    targetResolution = new Size(720, 1280); 
+                } else {
+                    targetResolution = new Size(720, 960); 
+                }
 
-                // 2. ImageAnalysis (Compat API)
                 ImageAnalysis.Builder analysisBuilder = new ImageAnalysis.Builder()
-                        .setTargetAspectRatio(targetRatio)
+                        .setTargetResolution(targetResolution)
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
                 
                 imageAnalysis = analysisBuilder.build();
                 imageAnalysis.setAnalyzer(cameraExecutor, this::analyzeImage);
 
-                // 3. ImageCapture
                 imageCapture = new ImageCapture.Builder()
                         .setTargetAspectRatio(targetRatio)
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
@@ -256,16 +344,10 @@ public class MainActivity extends AppCompatActivity {
                     camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis, imageCapture);
                     calculateBaseFocalLength();
                     applyFocalLengthZoom(selectedFocalLength);
-                } catch (IllegalArgumentException e) {
-                    Log.e("Camera", "Bind failed", e);
-                    Toast.makeText(getApplicationContext(), "Camera config failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                }
+                } catch (IllegalArgumentException e) {}
 
             } catch (ExecutionException | InterruptedException e) {
-                Log.e("Camera", "Provider init failed", e);
-            } catch (Exception e) {
-                Log.e("Camera", "Unexpected error", e);
-            }
+            } catch (Exception e) {}
         }, ContextCompat.getMainExecutor(this));
     }
 
@@ -279,76 +361,54 @@ public class MainActivity extends AppCompatActivity {
             int width = image.getWidth();
             int height = image.getHeight();
             
-            // Safety check for invalid dimensions or 0-size buffers
-            if (width <= 0 || height <= 0) {
-                image.close();
-                return;
-            }
-
+            if (width <= 0 || height <= 0) { image.close(); return; }
+            
             int rotationDegrees = image.getImageInfo().getRotationDegrees();
             
-            // Double buffering
             Bitmap targetBitmap = useBufferA ? renderBitmapA : renderBitmapB;
-            
-            // Re-allocate bitmaps if size changes or null
             if (targetBitmap == null || targetBitmap.getWidth() != width || targetBitmap.getHeight() != height) {
                 targetBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                 if (useBufferA) renderBitmapA = targetBitmap; else renderBitmapB = targetBitmap;
             }
             
-            // Re-allocate pixel buffer if size changes
             if (cachedPixelBuffer == null || cachedPixelBuffer.length != width * height) {
                 cachedPixelBuffer = new int[width * height];
             }
             
             ImageProxy.PlaneProxy[] planes = image.getPlanes();
-            if (planes == null || planes.length == 0) {
-                image.close();
-                return;
-            }
+            if (planes == null || planes.length == 0) { image.close(); return; }
             
             ByteBuffer buffer = planes[0].getBuffer();
             buffer.rewind();
             
-            // Loose check: just ensure we have enough data to fill the bitmap
-            if (buffer.remaining() < targetBitmap.getByteCount()) {
-                 image.close();
-                 return;
-            }
+            if (buffer.remaining() < width * height * 4) { image.close(); return; }
             
             targetBitmap.copyPixelsFromBuffer(buffer);
             image.close();
 
-            // Apply Filters
-            ImageUtils.applyPreviewEffects(targetBitmap, cachedPixelBuffer, currentFilter, currentSaturation, 
-                curveView != null ? curveView.getLutRGB() : null, 
-                curveView != null ? curveView.getLutR() : null, 
-                curveView != null ? curveView.getLutG() : null, 
-                curveView != null ? curveView.getLutB() : null);
+            int[][] luts = cachedMasterLUTs;
+            float[] cm = cachedColorMatrix;
+            
+            if (luts != null) {
+                ImageUtils.applyPreviewEffects(targetBitmap, cachedPixelBuffer, cm, 
+                    luts[0], luts[1], luts[2], luts[3]);
+            }
 
             final Bitmap finalBitmap = targetBitmap;
             runOnUiThread(() -> {
                 if (!isDestroyed() && !isFinishing() && !isFrozen && finalBitmap != null) {
                     ivPreviewOverlay.setImageBitmap(finalBitmap);
                     
-                    if (ivPreviewOverlay.getRotation() != rotationDegrees) {
-                         ivPreviewOverlay.setRotation(rotationDegrees);
-                    }
+                    if (ivPreviewOverlay.getRotation() != rotationDegrees) ivPreviewOverlay.setRotation(rotationDegrees);
                     
-                    ImageView.ScaleType targetScale = (aspectRatioMode == 2) 
-                        ? ImageView.ScaleType.CENTER_INSIDE 
-                        : ImageView.ScaleType.CENTER_CROP;
-                    if (ivPreviewOverlay.getScaleType() != targetScale) {
-                        ivPreviewOverlay.setScaleType(targetScale);
-                    }
+                    ImageView.ScaleType targetScale = (aspectRatioMode == 2) ? ImageView.ScaleType.CENTER_INSIDE : ImageView.ScaleType.CENTER_CROP;
+                    if (ivPreviewOverlay.getScaleType() != targetScale) ivPreviewOverlay.setScaleType(targetScale);
                 }
             });
-            
             useBufferA = !useBufferA;
             
-        } catch (Exception e) {
-            e.printStackTrace();
-            try { image.close(); } catch(Exception ignored) {}
+        } catch (Exception e) { 
+            try { image.close(); } catch(Exception ignored) {} 
         }
     }
 
@@ -360,20 +420,27 @@ public class MainActivity extends AppCompatActivity {
             vShutterFlash.setVisibility(View.VISIBLE);
             vShutterFlash.setAlpha(1f);
             vShutterFlash.animate().alpha(0f).setDuration(150).setListener(new AnimatorListenerAdapter() {
-                @Override
-                public void onAnimationEnd(Animator animation) {
-                    vShutterFlash.setVisibility(View.GONE);
-                }
+                @Override public void onAnimationEnd(Animator animation) { vShutterFlash.setVisibility(View.GONE); }
             }).start();
         }
         
-        int[] lutRGB = curveView != null ? curveView.getLutRGB() : null;
-        int[] lutR = curveView != null ? curveView.getLutR() : null;
-        int[] lutG = curveView != null ? curveView.getLutG() : null;
-        int[] lutB = curveView != null ? curveView.getLutB() : null;
+        ImageUtils.CurvePreset presetUsed = new ImageUtils.CurvePreset();
+        presetUsed.rgb = new ArrayList<>(currentPreset.rgb);
+        presetUsed.r = new ArrayList<>(currentPreset.r);
+        presetUsed.g = new ArrayList<>(currentPreset.g);
+        presetUsed.b = new ArrayList<>(currentPreset.b);
+        presetUsed.saturation = currentPreset.saturation;
+        presetUsed.highlights = currentPreset.highlights;
+        presetUsed.shadows = currentPreset.shadows;
+        presetUsed.whites = currentPreset.whites;
+        presetUsed.black = currentPreset.black;
+        presetUsed.midtones = currentPreset.midtones;
+        presetUsed.shadowHue = currentPreset.shadowHue;
+        presetUsed.shadowSat = currentPreset.shadowSat;
+        presetUsed.highlightHue = currentPreset.highlightHue;
+        presetUsed.highlightSat = currentPreset.highlightSat;
+
         boolean crop = (aspectRatioMode == 2);
-        float sat = currentSaturation;
-        ImageUtils.FilterType filter = currentFilter;
         ImageUtils.WatermarkConfig wm = wmConfig.clone(); 
 
         imageCapture.takePicture(ContextCompat.getMainExecutor(this), new ImageCapture.OnImageCapturedCallback() {
@@ -383,12 +450,9 @@ public class MainActivity extends AppCompatActivity {
                     try {
                         Bitmap bitmap = ImageUtils.imageProxyToBitmap(image);
                         image.close();
-                        
                         if (bitmap != null) {
-                            Bitmap processed = ImageUtils.processImage(bitmap, filter, sat,
-                                    lutRGB, lutR, lutG, lutB, wm, crop);
+                            Bitmap processed = ImageUtils.processImage(bitmap, presetUsed, wm, crop);
                             Uri savedUri = saveImage(processed);
-                            
                             if (savedUri != null) {
                                 runOnUiThread(() -> {
                                     if (!isDestroyed()) {
@@ -398,15 +462,10 @@ public class MainActivity extends AppCompatActivity {
                                 });
                             }
                         }
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    } catch (Exception e) {}
                 });
             }
-            @Override
-            public void onError(@NonNull ImageCaptureException exception) {
-                Toast.makeText(getApplicationContext(), "Capture Failed", Toast.LENGTH_SHORT).show();
-            }
+            @Override public void onError(@NonNull ImageCaptureException exception) {}
         });
     }
 
@@ -443,24 +502,15 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
             );
-        } catch (Exception e) {
-            // Some devices might crash on registry binding in certain lifecycle states
-        }
+        } catch (Exception e) {}
     }
     
     private void saveXmpToFile(Uri uri) {
-        captureCurrentStateToPreset(currentPreset);
         String xmp = currentPreset.toXmp();
         try {
             OutputStream os = getContentResolver().openOutputStream(uri);
-            if (os != null) {
-                os.write(xmp.getBytes());
-                os.close();
-                Toast.makeText(this, "Exported", Toast.LENGTH_SHORT).show();
-            }
-        } catch (Exception e) {
-            Toast.makeText(this, "Failed", Toast.LENGTH_SHORT).show();
-        }
+            if (os != null) { os.write(xmp.getBytes()); os.close(); Toast.makeText(this, "Exported", Toast.LENGTH_SHORT).show(); }
+        } catch (Exception e) {}
     }
     
     private void importXmpFromFile(Uri uri) {
@@ -469,18 +519,15 @@ public class MainActivity extends AppCompatActivity {
             BufferedReader reader = new BufferedReader(new InputStreamReader(is));
             StringBuilder sb = new StringBuilder();
             String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
+            while ((line = reader.readLine()) != null) sb.append(line).append("\n");
             is.close();
             ImageUtils.CurvePreset newPreset = ImageUtils.CurvePreset.fromXmp(sb.toString());
             loadedPresets.add(newPreset);
             refreshPresetListUI();
-            applyPreset(newPreset);
+            currentPreset = newPreset;
+            updateUIFromPreset();
             Toast.makeText(this, "Imported", Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "Invalid XMP", Toast.LENGTH_SHORT).show();
-        }
+        } catch (Exception e) {}
     }
 
     private void setupControls() {
@@ -501,23 +548,11 @@ public class MainActivity extends AppCompatActivity {
             
             findViewById(R.id.btnEditPreset).setOnClickListener(v -> { performHaptic(); enterEditorMode(); });
             findViewById(R.id.btnCloseEditor).setOnClickListener(v -> { performHaptic(); exitEditorMode(); });
-
-            sbSaturation.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                @Override
-                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                    currentSaturation = progress - 100;
-                    triggerPreviewUpdate();
-                }
-                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-            });
             
             findViewById(R.id.btnResetCurve).setOnClickListener(v -> {
                 performHaptic();
-                currentSaturation = 0;
-                sbSaturation.setProgress(100);
                 curveView.resetCurves();
-                triggerPreviewUpdate();
+                updatePresetFromUI();
             });
             
             findViewById(R.id.btnSavePreset).setOnClickListener(v -> showSavePresetDialog());
@@ -536,7 +571,7 @@ public class MainActivity extends AppCompatActivity {
                     intent.setType("application/xml");
                     intent.putExtra(Intent.EXTRA_TITLE, currentPreset.name + ".xmp");
                     exportLauncher.launch(intent);
-                } catch(Exception e) { Toast.makeText(this, "Feature unavailable", Toast.LENGTH_SHORT).show(); }
+                } catch(Exception e) {}
             });
             
             findViewById(R.id.btnImportXmp).setOnClickListener(v -> {
@@ -545,7 +580,7 @@ public class MainActivity extends AppCompatActivity {
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
                     intent.setType("*/*"); 
                     importLauncher.launch(intent);
-                } catch(Exception e) { Toast.makeText(this, "Feature unavailable", Toast.LENGTH_SHORT).show(); }
+                } catch(Exception e) {}
             });
         } catch (Exception e) {}
     }
@@ -554,7 +589,6 @@ public class MainActivity extends AppCompatActivity {
         EditText input = new EditText(this);
         input.setHint("Preset Name");
         input.setTextColor(Color.BLACK);
-        
         new AlertDialog.Builder(this)
             .setTitle("Save Preset")
             .setView(input)
@@ -562,7 +596,22 @@ public class MainActivity extends AppCompatActivity {
                 String name = input.getText().toString();
                 if (!name.isEmpty()) {
                     ImageUtils.CurvePreset newPreset = new ImageUtils.CurvePreset();
-                    captureCurrentStateToPreset(newPreset);
+                    // Copy data
+                    newPreset.rgb = new ArrayList<>(currentPreset.rgb);
+                    newPreset.r = new ArrayList<>(currentPreset.r);
+                    newPreset.g = new ArrayList<>(currentPreset.g);
+                    newPreset.b = new ArrayList<>(currentPreset.b);
+                    newPreset.saturation = currentPreset.saturation;
+                    newPreset.highlights = currentPreset.highlights;
+                    newPreset.shadows = currentPreset.shadows;
+                    newPreset.whites = currentPreset.whites;
+                    newPreset.black = currentPreset.black;
+                    newPreset.midtones = currentPreset.midtones;
+                    newPreset.shadowHue = currentPreset.shadowHue;
+                    newPreset.shadowSat = currentPreset.shadowSat;
+                    newPreset.highlightHue = currentPreset.highlightHue;
+                    newPreset.highlightSat = currentPreset.highlightSat;
+                    
                     newPreset.name = name;
                     loadedPresets.add(newPreset);
                     refreshPresetListUI();
@@ -571,15 +620,6 @@ public class MainActivity extends AppCompatActivity {
             })
             .setNegativeButton("Cancel", null)
             .show();
-    }
-    
-    private void captureCurrentStateToPreset(ImageUtils.CurvePreset preset) {
-        if (curveView == null) return;
-        preset.rgb = curveView.getPoints(CurveView.Channel.RGB);
-        preset.r = curveView.getPoints(CurveView.Channel.RED);
-        preset.g = curveView.getPoints(CurveView.Channel.GREEN);
-        preset.b = curveView.getPoints(CurveView.Channel.BLUE);
-        preset.saturation = currentSaturation;
     }
     
     private void refreshPresetListUI() {
@@ -599,23 +639,13 @@ public class MainActivity extends AppCompatActivity {
             params.setMargins(0, 0, 16, 0);
             btn.setLayoutParams(params);
             
-            btn.setOnClickListener(v -> applyPreset(preset));
+            btn.setOnClickListener(v -> {
+                performHaptic();
+                currentPreset = preset;
+                updateUIFromPreset();
+            });
             llPresetList.addView(btn);
         }
-    }
-    
-    private void applyPreset(ImageUtils.CurvePreset preset) {
-        performHaptic();
-        currentPreset = preset;
-        if (curveView != null) {
-            curveView.setPoints(CurveView.Channel.RGB, preset.rgb);
-            curveView.setPoints(CurveView.Channel.RED, preset.r);
-            curveView.setPoints(CurveView.Channel.GREEN, preset.g);
-            curveView.setPoints(CurveView.Channel.BLUE, preset.b);
-        }
-        currentSaturation = preset.saturation;
-        if (sbSaturation != null) sbSaturation.setProgress((int)(currentSaturation + 100));
-        triggerPreviewUpdate();
     }
     
     private void enterEditorMode() {
@@ -625,6 +655,18 @@ public class MainActivity extends AppCompatActivity {
             frozenBitmap = currentDisplay.copy(Bitmap.Config.ARGB_8888, true);
             if (presetEditorContainer != null) presetEditorContainer.setVisibility(View.VISIBLE);
             if (controlsContainer != null) controlsContainer.setVisibility(View.GONE);
+            
+            // Resize preview container to show full image in the top space
+            if (previewContainer != null && presetEditorContainer != null) {
+                 ConstraintLayout.LayoutParams params = (ConstraintLayout.LayoutParams) previewContainer.getLayoutParams();
+                 params.bottomToTop = presetEditorContainer.getId();
+                 params.bottomToBottom = ConstraintLayout.LayoutParams.UNSET;
+                 previewContainer.setLayoutParams(params);
+                 
+                 // Ensure the overlay scales to fit inside the new smaller container fully
+                 ivPreviewOverlay.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            }
+            
             updateFreezeFrame();
         } else {
             Toast.makeText(this, "Wait for stream...", Toast.LENGTH_SHORT).show();
@@ -634,6 +676,19 @@ public class MainActivity extends AppCompatActivity {
     private void exitEditorMode() {
         if (presetEditorContainer != null) presetEditorContainer.setVisibility(View.GONE);
         if (controlsContainer != null) controlsContainer.setVisibility(View.VISIBLE);
+        
+        // Reset preview container to full screen
+        if (previewContainer != null) {
+             ConstraintLayout.LayoutParams params = (ConstraintLayout.LayoutParams) previewContainer.getLayoutParams();
+             params.bottomToTop = ConstraintLayout.LayoutParams.UNSET;
+             params.bottomToBottom = ConstraintLayout.LayoutParams.PARENT_ID;
+             previewContainer.setLayoutParams(params);
+             
+             // Reset scale type logic
+             ImageView.ScaleType targetScale = (aspectRatioMode == 2) ? ImageView.ScaleType.CENTER_INSIDE : ImageView.ScaleType.CENTER_CROP;
+             ivPreviewOverlay.setScaleType(targetScale);
+        }
+
         frozenBitmap = null;
         isFrozen = false; 
     }
@@ -642,11 +697,11 @@ public class MainActivity extends AppCompatActivity {
         if (frozenBitmap == null) return;
         cameraExecutor.execute(() -> {
              Bitmap temp = frozenBitmap.copy(Bitmap.Config.ARGB_8888, true);
-             ImageUtils.applyPreviewEffects(temp, null, currentFilter, currentSaturation, 
-                curveView != null ? curveView.getLutRGB() : null, 
-                curveView != null ? curveView.getLutR() : null, 
-                curveView != null ? curveView.getLutG() : null, 
-                curveView != null ? curveView.getLutB() : null);
+             int[][] luts = cachedMasterLUTs;
+             float[] cm = cachedColorMatrix;
+             if (luts != null) {
+                 ImageUtils.applyPreviewEffects(temp, null, cm, luts[0], luts[1], luts[2], luts[3]);
+             }
              runOnUiThread(() -> {
                  if (!isDestroyed()) ivPreviewOverlay.setImageBitmap(temp);
              });
@@ -670,25 +725,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void setupFilterButtons() {
-        if (filterContainer == null) return;
-        filterContainer.removeAllViews();
-        for (ImageUtils.FilterType type : ImageUtils.FilterType.values()) {
-            Button btn = new Button(this, null, android.R.attr.borderlessButtonStyle);
-            btn.setText(type.name().replace("_", " "));
-            btn.setTextColor(type == currentFilter ? Color.YELLOW : Color.WHITE);
-            btn.setTextSize(12);
-            btn.setBackgroundColor(Color.TRANSPARENT);
-            btn.setOnClickListener(v -> {
-                performHaptic();
-                currentFilter = type;
-                setupFilterButtons(); 
-                triggerPreviewUpdate();
-            });
-            filterContainer.addView(btn);
-        }
-    }
-
     private void showWatermarkSettingsDialog() {
         BottomSheetDialog dialog = new BottomSheetDialog(this);
         dialog.setContentView(R.layout.dialog_watermark_settings);
@@ -699,10 +735,11 @@ public class MainActivity extends AppCompatActivity {
         Switch swTime = dialog.findViewById(R.id.swShowTime);
         Switch swCoords = dialog.findViewById(R.id.swShowCoords);
         Switch swPlace = dialog.findViewById(R.id.swShowPlace);
-        RadioGroup rgSize = dialog.findViewById(R.id.rgTextSize);
         RadioGroup rgPos = dialog.findViewById(R.id.rgPosition);
         RadioGroup rgStyle = dialog.findViewById(R.id.rgStyle);
         RadioGroup rgBg = dialog.findViewById(R.id.rgBgColor);
+        SeekBar sbSize = dialog.findViewById(R.id.sbWatermarkSize);
+        TextView tvSize = dialog.findViewById(R.id.tvSizeValue);
 
         if (swEnabled != null) {
             swEnabled.setChecked(wmConfig.enabled);
@@ -711,12 +748,21 @@ public class MainActivity extends AppCompatActivity {
             swTime.setChecked(wmConfig.showTime);
             swCoords.setChecked(wmConfig.showCoords);
             swPlace.setChecked(wmConfig.showPlace);
+            
+            int progress = (int) (wmConfig.watermarkScale * 1000);
+            sbSize.setProgress(progress);
+            tvSize.setText(String.format(Locale.US, "%.1f%%", wmConfig.watermarkScale * 100));
 
-            switch (wmConfig.textSize) {
-                case 0: rgSize.check(R.id.rbSmall); break;
-                case 1: rgSize.check(R.id.rbMedium); break;
-                case 2: rgSize.check(R.id.rbLarge); break;
-            }
+            sbSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                     float val = progress / 1000f; 
+                     tvSize.setText(String.format(Locale.US, "%.1f%%", val * 100));
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+
             switch (wmConfig.position) {
                 case 0: rgPos.check(R.id.rbPosLeft); break;
                 case 1: rgPos.check(R.id.rbPosCenter); break;
@@ -736,12 +782,8 @@ public class MainActivity extends AppCompatActivity {
                 wmConfig.showTime = swTime.isChecked();
                 wmConfig.showCoords = swCoords.isChecked();
                 wmConfig.showPlace = swPlace.isChecked();
+                wmConfig.watermarkScale = sbSize.getProgress() / 1000f;
 
-                int selectedId = rgSize.getCheckedRadioButtonId();
-                if (selectedId == R.id.rbSmall) wmConfig.textSize = 0;
-                else if (selectedId == R.id.rbMedium) wmConfig.textSize = 1;
-                else if (selectedId == R.id.rbLarge) wmConfig.textSize = 2;
-                
                 int posId = rgPos.getCheckedRadioButtonId();
                 if (posId == R.id.rbPosLeft) wmConfig.position = 0;
                 else if (posId == R.id.rbPosCenter) wmConfig.position = 1;
@@ -896,14 +938,10 @@ public class MainActivity extends AppCompatActivity {
         } else {
              permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Vibrate permission is normal, doesn't need runtime request usually but good to check context
-        }
         ActivityCompat.requestPermissions(this, permissions.toArray(new String[0]), 10);
     }
     
     private void checkAndRequestOptionalPermissions() {
-        // Silent check for optional features
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
              ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 11);
         }
@@ -916,8 +954,6 @@ public class MainActivity extends AppCompatActivity {
             if (isCameraPermissionGranted()) {
                 startCamera();
                 updateLocation();
-            } else {
-                Toast.makeText(this, "Camera permission is required.", Toast.LENGTH_LONG).show();
             }
         }
     }

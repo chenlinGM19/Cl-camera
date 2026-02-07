@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.media.ThumbnailUtils;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -56,23 +57,20 @@ public class GalleryActivity extends AppCompatActivity {
         super.onResume();
         loadImages();
     }
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executor.shutdown();
+    }
 
     private void loadImages() {
         executor.execute(() -> {
             List<Uri> uris = new ArrayList<>();
             String[] projection = new String[]{ MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN };
             
-            String selection;
-            String[] selectionArgs;
-            
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                selection = MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?";
-                selectionArgs = new String[]{"%Pictures/Camulator%"};
-            } else {
-                selection = MediaStore.Images.Media.DATA + " LIKE ?";
-                selectionArgs = new String[]{"%Camulator%"};
-            }
-
+            String selection = null;
+            String[] selectionArgs = null;
             String sortOrder = MediaStore.Images.Media.DATE_TAKEN + " DESC";
 
             try (Cursor cursor = getContentResolver().query(
@@ -84,7 +82,9 @@ public class GalleryActivity extends AppCompatActivity {
                         uris.add(ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id));
                     }
                 }
-            } catch (Exception e) {}
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
 
             runOnUiThread(() -> {
                 if (uris.isEmpty()) {
@@ -102,13 +102,12 @@ public class GalleryActivity extends AppCompatActivity {
     private class GalleryAdapter extends RecyclerView.Adapter<GalleryAdapter.ViewHolder> {
         private final List<Uri> uris = new ArrayList<>();
         private final Context context;
-        // Simple Memory Cache
         private final LruCache<Uri, Bitmap> memoryCache;
 
         public GalleryAdapter(Context context) {
             this.context = context;
             final int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
-            final int cacheSize = maxMemory / 8; // 1/8th of memory for cache
+            final int cacheSize = maxMemory / 8; 
             memoryCache = new LruCache<Uri, Bitmap>(cacheSize) {
                 @Override
                 protected int sizeOf(Uri key, Bitmap bitmap) {
@@ -134,29 +133,31 @@ public class GalleryActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
             Uri uri = uris.get(position);
-            holder.ivThumb.setImageBitmap(null); // Clear recycled view
+            holder.ivThumb.setImageBitmap(null); 
             
             Bitmap cached = memoryCache.get(uri);
             if (cached != null) {
                 holder.ivThumb.setImageBitmap(cached);
             } else {
-                // Async Load
                 executor.execute(() -> {
                     try {
                         Bitmap thumb = null;
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                            thumb = context.getContentResolver().loadThumbnail(uri, new Size(300, 300), null);
-                        } else {
-                            // Older API fallback (inefficient but works)
-                            thumb = MediaStore.Images.Media.getBitmap(context.getContentResolver(), uri);
-                            thumb = Bitmap.createScaledBitmap(thumb, 300, 300, false);
+                            try {
+                                thumb = context.getContentResolver().loadThumbnail(uri, new Size(256, 256), null);
+                            } catch (IOException e) {}
+                        } 
+                        
+                        if (thumb == null) {
+                            long id = ContentUris.parseId(uri);
+                            thumb = MediaStore.Images.Thumbnails.getThumbnail(context.getContentResolver(), id, MediaStore.Images.Thumbnails.MINI_KIND, null);
                         }
                         
                         if (thumb != null) {
                             memoryCache.put(uri, thumb);
                             final Bitmap finalThumb = thumb;
                             new Handler(Looper.getMainLooper()).post(() -> {
-                                if (holder.getAdapterPosition() == position) {
+                                if (holder.getBindingAdapterPosition() == position) {
                                     holder.ivThumb.setImageBitmap(finalThumb);
                                 }
                             });
