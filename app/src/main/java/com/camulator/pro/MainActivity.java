@@ -308,10 +308,14 @@ public class MainActivity extends AppCompatActivity {
         // Shutter Slider
         binding.sliderS.addOnChangeListener((slider, value, fromUser) -> updateCameraExposure());
 
-        // Focus Slider
-        binding.sliderF.addOnChangeListener((slider, value, fromUser) -> updateCameraFocus());
+        // Focus Slider - Manual Focus Logic
+        binding.sliderF.addOnChangeListener((slider, value, fromUser) -> {
+            if (fromUser) {
+                updateManualFocus(value);
+            }
+        });
 
-        // Auto Focus Reset
+        // Auto Focus Reset Button - Switches back to AF
         binding.btnResetFocus.setOnClickListener(v -> {
             if (camera == null) return;
             camera.getCameraControl().cancelFocusAndMetering();
@@ -323,7 +327,7 @@ public class MainActivity extends AppCompatActivity {
         // Double Tap Resets
         setupSliderDoubleTap(binding.sliderEV, 0.0f);
         setupSliderDoubleTap(binding.sliderS, 0.0f);
-        setupSliderDoubleTap(binding.sliderF, 0.0f); // Resets to Auto Focus logic
+        setupSliderDoubleTap(binding.sliderF, 0.0f); // Double tap on Focus slider resets to 0 (Infinity) and triggers Auto via logic in setupSliderDoubleTap
         
         // Touch to Focus
         binding.viewFinder.setOnTouchListener((v, event) -> {
@@ -338,9 +342,11 @@ public class MainActivity extends AppCompatActivity {
                     FocusMeteringAction action = new FocusMeteringAction.Builder(point).build();
                     camera.getCameraControl().startFocusAndMetering(action);
                     
-                    binding.btnResetFocus.setVisibility(View.INVISIBLE);
+                    // Show Reset/Auto button so user can unlock focus
+                    binding.btnResetFocus.setVisibility(View.VISIBLE);
                     binding.tvValF.setText("AF");
-                    // Don't reset slider F visual to 0 immediately to avoid jump, or set to 0 to indicate Auto
+                    // Reset slider visual to 0 to indicate not in manual override, 
+                    // but don't trigger manual focus logic (fromUser check handles this)
                     binding.sliderF.setValue(0f);
                     
                     showFocusIndicator(x, y);
@@ -418,29 +424,24 @@ public class MainActivity extends AppCompatActivity {
         c2.setCaptureRequestOptions(builder.build());
     }
     
-    private void updateCameraFocus() {
+    private void updateManualFocus(float sliderValue) {
         if (camera == null) return;
-        float val = binding.sliderF.getValue();
         
-        if (val == 0f) {
-            // Treat 0 as "Auto" intent if dragged there? 
-            // Or just allow very far focus. 
-            // Usually explicit button handles Auto. 
-            // For now, allow 0 to be infinity.
-        }
+        // Map slider (0.0 - 1.0) to focus distance (0 - minFocusDist)
+        // 0.0 is Infinity (Diopters 0), 1.0 is Closest
+        float dist = sliderValue * (minFocusDist != null ? minFocusDist : 0f);
         
-        if (minFocusDist != null && minFocusDist > 0) {
-             float dist = val * minFocusDist;
-             Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
-             
-             CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
-             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
-             builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
-             c2.setCaptureRequestOptions(builder.build());
-             
-             binding.tvValF.setText(String.format(Locale.US, "%.1f", dist));
-             binding.btnResetFocus.setVisibility(View.VISIBLE);
-        }
+        Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+        CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
+        
+        // Enforce Manual Focus Mode
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+        builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
+        
+        c2.setCaptureRequestOptions(builder.build());
+        
+        binding.tvValF.setText(String.format(Locale.US, "%.1f", dist));
+        binding.btnResetFocus.setVisibility(View.VISIBLE);
     }
     
     // --- Editor Setup & Events ---
@@ -528,7 +529,7 @@ public class MainActivity extends AppCompatActivity {
                 slider.setValue(defaultValue);
                 // Trigger listener if needed, but setValue usually triggers change listener
                 if (slider == binding.sliderF) {
-                    binding.btnResetFocus.performClick(); // Specific logic for Focus
+                    binding.btnResetFocus.performClick(); // Specific logic for Focus to return to Auto
                 }
                 return true;
             }
