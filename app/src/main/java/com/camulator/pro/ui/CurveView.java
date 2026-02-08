@@ -35,8 +35,7 @@ public class CurveView extends View {
     }
 
     // Paints
-    private Paint gridPaint, subGridPaint, guidePaint;
-    private Paint curvePaint, fillPaint;
+    private Paint gridPaint, curvePaint, fillPaint;
     private Paint pointPaint, pointStrokePaint;
     private Paint textPaint, textBgPaint, crosshairPaint, histogramPaint;
 
@@ -52,6 +51,11 @@ public class CurveView extends View {
     private GestureDetector gestureDetector;
     private RectF graphRect = new RectF();
     private float paddingPx, touchThresholdPx;
+    private boolean isDraggingOutside = false; // Flag for deletion
+    
+    // Precision Control
+    private int precisionLevel = 0; // 0 (Fast/Normal) to 5 (Slow/Precise)
+    private float lastTouchX, lastTouchY;
     
     // Drawing Paths
     private Path curvePath = new Path();
@@ -76,7 +80,7 @@ public class CurveView extends View {
 
         curvePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         curvePaint.setStyle(Paint.Style.STROKE);
-        curvePaint.setStrokeWidth(6f); // Thicker for better visibility
+        curvePaint.setStrokeWidth(6f);
         curvePaint.setStrokeCap(Paint.Cap.ROUND);
 
         fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -110,23 +114,38 @@ public class CurveView extends View {
         histogramPaint.setColor(0x50AAAAAA);
         histogramPaint.setPathEffect(new CornerPathEffect(4)); 
 
-        resetChannel(Channel.RGB);
-        resetChannel(Channel.RED);
-        resetChannel(Channel.GREEN);
-        resetChannel(Channel.BLUE);
+        resetAllChannels();
 
         gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
+                // Keep double tap as secondary delete method
                 handleDoubleTap(e.getX(), e.getY());
                 return true;
             }
             @Override
-            public boolean onDown(MotionEvent e) { 
-                // Don't consume here to allow manual touch handling in onTouchEvent
-                return true; 
-            }
+            public boolean onDown(MotionEvent e) { return true; }
         });
+    }
+
+    public void setPrecisionLevel(int level) {
+        this.precisionLevel = Math.max(0, Math.min(5, level));
+    }
+
+    public void resetAllChannels() {
+        channelPoints.clear();
+        resetChannel(Channel.RGB);
+        resetChannel(Channel.RED);
+        resetChannel(Channel.GREEN);
+        resetChannel(Channel.BLUE);
+        invalidate();
+        if(listener != null) listener.onChange();
+    }
+    
+    public void resetActiveChannel() {
+        resetChannel(activeChannel);
+        invalidate();
+        if(listener != null) listener.onChange();
     }
 
     public void setHistogramData(int[] data) {
@@ -149,6 +168,18 @@ public class CurveView extends View {
 
     public void setOnCurveChangeListener(OnCurveChangeListener listener) {
         this.listener = listener;
+    }
+    
+    public void setControlPoints(Map<Channel, List<PointF>> data) {
+        if (data == null) return;
+        this.channelPoints.clear();
+        // Deep copy
+        for (Map.Entry<Channel, List<PointF>> entry : data.entrySet()) {
+            List<PointF> list = new ArrayList<>();
+            for(PointF p : entry.getValue()) list.add(new PointF(p.x, p.y));
+            this.channelPoints.put(entry.getKey(), list);
+        }
+        invalidate();
     }
 
     public Map<Channel, List<PointF>> getControlPointsCopy() {
@@ -201,7 +232,6 @@ public class CurveView extends View {
         curvePaint.setColor(mainColor);
         fillPaint.setShader(new LinearGradient(0, graphRect.top, 0, bottom, dimColor, 0x00000000, Shader.TileMode.CLAMP));
 
-        // Draw Spline
         drawSpline(canvas, w, h, left, bottom);
 
         // Draw Points
@@ -214,6 +244,13 @@ public class CurveView extends View {
 
                 boolean isActive = (i == activePointIndex);
                 float radius = isActive ? 24f : 16f;
+                
+                // Visual feedback for deleting
+                if (isActive && isDraggingOutside) {
+                    pointPaint.setColor(Color.RED);
+                } else {
+                    pointPaint.setColor(Color.WHITE);
+                }
 
                 if (isActive) {
                     canvas.drawLine(px, graphRect.top, px, bottom, crosshairPaint);
@@ -230,7 +267,6 @@ public class CurveView extends View {
         }
     }
     
-    // Calculates and draws the visual Spline path matching ImageProcessor
     private void drawSpline(Canvas canvas, float w, float h, float left, float bottom) {
         List<PointF> points = channelPoints.get(activeChannel);
         if (points == null || points.size() < 2) return;
@@ -238,8 +274,6 @@ public class CurveView extends View {
         curvePath.reset();
         fillPath.reset();
         
-        // Use the ImageProcessor's Natural Cubic Spline algo to generate display points
-        // 256 steps ensures the visual curve looks identical to the applied curve
         float[] lut = ImageProcessor.calculateCurvePoints(points, 256); 
         
         for (int i = 0; i < lut.length; i++) {
@@ -284,10 +318,20 @@ public class CurveView extends View {
     }
 
     private void drawTooltip(Canvas canvas, PointF p, float px, float py) {
-        String text = String.format(Locale.US, "%.2f / %.2f", p.x, p.y);
+        String text = isDraggingOutside ? "Release to Delete" : String.format(Locale.US, "%.2f / %.2f", p.x, p.y);
         float textW = textPaint.measureText(text);
-        float pad = 16f;
-        RectF bg = new RectF(px - textW/2 - pad, py - 100, px + textW/2 + pad, py - 50);
+        float pad = 24f;
+        
+        // Push tooltip significantly higher (approx 200px) to clear finger
+        // If it goes off top screen, push it below
+        float offset = 200f;
+        float tY = py - offset;
+        
+        if (tY < graphRect.top) {
+             tY = py + offset;
+        }
+        
+        RectF bg = new RectF(px - textW/2 - pad, tY, px + textW/2 + pad, tY + 60);
         canvas.drawRect(bg, textBgPaint);
         Paint.FontMetrics fm = textPaint.getFontMetrics();
         canvas.drawText(text, bg.centerX() - textW / 2, bg.centerY() - (fm.descent + fm.ascent) / 2, textPaint);
@@ -295,8 +339,6 @@ public class CurveView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // Pass to detector first, but do NOT return immediately if it returns true.
-        // We need to allow the move/up logic to run unless it was a double tap.
         gestureDetector.onTouchEvent(event);
         
         float x = event.getX();
@@ -304,52 +346,99 @@ public class CurveView extends View {
         float w = graphRect.width();
         float h = graphRect.height();
         
+        // Normalized coordinates based on Graph Rect
         float nx = (x - graphRect.left) / w;
         float ny = (graphRect.bottom - y) / h;
-        nx = Math.max(0f, Math.min(1f, nx));
-        ny = Math.max(0f, Math.min(1f, ny));
+        
+        // Clamp for logic, but keep raw Y for drag-delete check
+        float clampedNx = Math.max(0f, Math.min(1f, nx));
+        float clampedNy = Math.max(0f, Math.min(1f, ny));
 
         List<PointF> points = channelPoints.get(activeChannel);
 
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
                 activePointIndex = getNearestPointIndex(points, x, y);
+                isDraggingOutside = false;
+                lastTouchX = x;
+                lastTouchY = y;
+                
                 if (activePointIndex == -1) {
-                    // Check spacing
-                    boolean canAdd = true;
-                    for(PointF p : points) {
-                        if (Math.abs(p.x - nx) < 0.05f) { canAdd = false; break; }
-                    }
-                    if (canAdd) {
-                        PointF newPoint = new PointF(nx, ny);
-                        points.add(newPoint);
-                        sortPoints(points);
-                        activePointIndex = points.indexOf(newPoint);
-                        invalidate();
-                        if (listener != null) listener.onChange();
+                    // Check spacing for new point
+                    if (graphRect.contains(x, y)) {
+                        boolean canAdd = true;
+                        for(PointF p : points) {
+                            if (Math.abs(p.x - clampedNx) < 0.05f) { canAdd = false; break; }
+                        }
+                        if (canAdd) {
+                            PointF newPoint = new PointF(clampedNx, clampedNy);
+                            points.add(newPoint);
+                            sortPoints(points);
+                            activePointIndex = points.indexOf(newPoint);
+                            invalidate();
+                            if (listener != null) listener.onChange();
+                        }
                     }
                 }
                 getParent().requestDisallowInterceptTouchEvent(true);
                 break;
+                
             case MotionEvent.ACTION_MOVE:
                 if (activePointIndex != -1) {
                     PointF p = points.get(activePointIndex);
-                    // Constraint endpoints to X axis
-                    if (activePointIndex == 0) p.x = 0;
-                    else if (activePointIndex == points.size() - 1) p.x = 1;
-                    else {
+                    
+                    // Calculate relative movement (delta)
+                    float deltaX = x - lastTouchX;
+                    float deltaY = y - lastTouchY;
+                    
+                    // Apply Precision Factor
+                    // Level 0: 1:1 movement
+                    // Level 5: 1:16 movement (Very slow)
+                    float factor = 1.0f / (1 + precisionLevel * 3);
+                    
+                    float normalizedDeltaX = (deltaX / w) * factor;
+                    float normalizedDeltaY = -(deltaY / h) * factor; // Y is inverted in graph
+                    
+                    float newX = p.x + normalizedDeltaX;
+                    float newY = p.y + normalizedDeltaY;
+                    
+                    // Check if dragged outside vertically by threshold (using raw Y)
+                    float deleteThreshold = 150f; 
+                    isDraggingOutside = (y < graphRect.top - deleteThreshold) || (y > graphRect.bottom + deleteThreshold);
+                    
+                    // Cannot delete start/end points
+                    if (activePointIndex == 0 || activePointIndex == points.size() - 1) {
+                        isDraggingOutside = false;
+                        p.x = (activePointIndex == 0) ? 0 : 1;
+                    } else {
+                        // Constrain X between neighbors
                         PointF prev = points.get(activePointIndex - 1);
                         PointF next = points.get(activePointIndex + 1);
-                        p.x = Math.max(prev.x + 0.01f, Math.min(next.x - 0.01f, nx));
+                        p.x = Math.max(prev.x + 0.001f, Math.min(next.x - 0.001f, Math.max(0f, Math.min(1f, newX))));
                     }
-                    p.y = ny;
+                    
+                    p.y = Math.max(0f, Math.min(1f, newY));
+                    
+                    lastTouchX = x;
+                    lastTouchY = y;
+                    
                     invalidate();
                     if (listener != null) listener.onChange();
                 }
                 break;
+                
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                if (activePointIndex != -1 && isDraggingOutside) {
+                    // Delete point
+                    if (activePointIndex > 0 && activePointIndex < points.size() - 1) {
+                        points.remove(activePointIndex);
+                        if (listener != null) listener.onChange();
+                    }
+                }
                 activePointIndex = -1;
+                isDraggingOutside = false;
+                invalidate();
                 getParent().requestDisallowInterceptTouchEvent(false);
                 break;
         }

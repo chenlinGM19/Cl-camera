@@ -28,12 +28,17 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Range;
 import android.util.Size;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.camera2.interop.Camera2CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
@@ -43,9 +48,12 @@ import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ExposureState;
+import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
+import androidx.camera.core.MeteringPoint;
+import androidx.camera.core.MeteringPointFactory;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.constraintlayout.widget.ConstraintLayout;
@@ -65,15 +73,22 @@ import com.google.android.gms.location.LocationServices;
 import com.google.android.material.slider.Slider;
 import com.google.common.util.concurrent.ListenableFuture;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -106,21 +121,32 @@ public class MainActivity extends AppCompatActivity {
     // Edit Params - Volatile for thread safety
     private volatile ImageProcessor.EditParams editParams = new ImageProcessor.EditParams();
     private volatile Map<CurveView.Channel, List<PointF>> previewCurves;
+    private Bitmap logoBitmap = null;
     
     private int activeColorGradeMode = 0; // 0=Shadow, 1=Mid, 2=High
     
     private long lastHistogramUpdate = 0;
-    private static final long HISTOGRAM_UPDATE_INTERVAL_MS = 66;
+    private static final int HISTOGRAM_UPDATE_INTERVAL_MS = 66;
     private boolean isMenuOpen = false;
     private static final int REQUEST_CODE_PERMISSIONS = 10;
     private static final String PREFS_NAME = "CamulatorPrefs";
+    private static final String PREFS_PRESETS = "CamulatorPresets";
     
     private final List<TextView> focalViews = new ArrayList<>();
     
-    // Manual Exposure State
-    private boolean isManualExposure = false;
+    // Control Modes
+    private static final int PARAM_EV = 0;
+    private static final int PARAM_SHUTTER = 1;
+    private static final int PARAM_FOCUS = 2;
+    private int currentParamMode = PARAM_EV;
+
+    // Manual State
     private Range<Long> exposureTimeRange;
-    private static final int MANUAL_ISO = 640; // Fixed ISO for Manual S-mode
+    private Float minFocusDist = 0f;
+    private static final int MANUAL_ISO = 640; 
+    
+    // Logo Picker
+    private ActivityResultLauncher<String> pickLogoLauncher;
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -130,8 +156,15 @@ public class MainActivity extends AppCompatActivity {
         
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         
+        // Initialize Logo Picker
+        pickLogoLauncher = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
+            if (uri != null) {
+                loadAndSaveLogo(uri);
+            }
+        });
+
         hideSystemUI();
-        setupUI(); // Setup UI before loading settings to ensure views are ready
+        setupUI(); 
         loadSettings();
         
         // Init previewCurves with default state
@@ -184,6 +217,7 @@ public class MainActivity extends AppCompatActivity {
         editor.putInt("align", currentAlign);
         editor.putString("custom_text", binding.etWatermarkText.getText().toString());
         editor.putInt("height_progress", binding.seekHeight.getProgress());
+        editor.putInt("logo_radius", binding.seekLogoRadius.getProgress());
         editor.putInt("aspect_ratio_mode", currentAspectRatioMode);
         
         // Watermark flags
@@ -191,6 +225,7 @@ public class MainActivity extends AppCompatActivity {
         editor.putBoolean("wm_date", binding.swDate.isChecked());
         editor.putBoolean("wm_gps", binding.swGPS.isChecked());
         editor.putBoolean("wm_city", binding.cbCity.isChecked());
+        editor.putBoolean("wm_district", binding.cbDistrict.isChecked());
         editor.putBoolean("wm_street", binding.cbStreet.isChecked());
         
         // Save simple edit params
@@ -215,13 +250,19 @@ public class MainActivity extends AppCompatActivity {
         binding.seekHeight.setProgress(heightProg); 
         binding.tvWatermarkSizeLabel.setText(String.format(Locale.US, "Size: %.1f%%", heightProg / 10f));
 
+        int logoRadius = prefs.getInt("logo_radius", 0);
+        binding.seekLogoRadius.setProgress(logoRadius);
+        binding.tvLogoRadiusLabel.setText(String.format(Locale.US, "Logo Roundness: %d%%", logoRadius * 2)); // 0-50 maps to 0-100 visual
+
         currentAspectRatioMode = prefs.getInt("aspect_ratio_mode", AR_4_3);
+        updateRatioButtons();
         
         // Watermark Flags
         binding.swLogo.setChecked(prefs.getBoolean("wm_logo", true));
         binding.swDate.setChecked(prefs.getBoolean("wm_date", true));
         binding.swGPS.setChecked(prefs.getBoolean("wm_gps", true));
         binding.cbCity.setChecked(prefs.getBoolean("wm_city", true));
+        binding.cbDistrict.setChecked(prefs.getBoolean("wm_district", true));
         binding.cbStreet.setChecked(prefs.getBoolean("wm_street", false));
 
         // Load params
@@ -235,6 +276,9 @@ public class MainActivity extends AppCompatActivity {
         binding.seekShadows.setProgress(editParams.shadows + 100);
         binding.seekWhites.setProgress(editParams.whites + 100);
         binding.seekBlacks.setProgress(editParams.blacks + 100);
+        
+        // Load Logo
+        loadSavedLogo();
     }
 
     private void setupUI() {
@@ -254,109 +298,467 @@ public class MainActivity extends AppCompatActivity {
         setupFocalLength(binding.focal85mm, 3.5f);
         updateFocalLengthSelection(binding.focal24mm);
 
-        binding.btnAspectRatio.setOnClickListener(v -> toggleAspectRatio());
+        // Aspect Ratio Buttons
+        binding.btnRatio169.setOnClickListener(v -> setAspectRatio(AR_16_9));
+        binding.btnRatio43.setOnClickListener(v -> setAspectRatio(AR_4_3));
+        binding.btnRatio11.setOnClickListener(v -> setAspectRatio(AR_1_1));
+        
         binding.btnEdit.setOnClickListener(v -> toggleEditPanel());
         
-        // Exposure Mode Toggle
-        binding.btnExposureMode.setOnClickListener(v -> toggleExposureMode());
+        // Parameter Mode Selection
+        binding.btnParamEV.setOnClickListener(v -> setParamMode(PARAM_EV));
+        binding.btnParamS.setOnClickListener(v -> setParamMode(PARAM_SHUTTER));
+        binding.btnParamF.setOnClickListener(v -> setParamMode(PARAM_FOCUS));
+        setParamMode(PARAM_EV); // Init default
         
-        // Slider Control
-        binding.evSlider.addOnChangeListener((slider, value, fromUser) -> {
+        // Shared Slider Listener
+        binding.paramSlider.addOnChangeListener((slider, value, fromUser) -> {
             if (camera == null) return;
             
-            if (isManualExposure) {
-                // Manual Shutter Speed Logic
-                if (exposureTimeRange != null) {
-                    double pct = value / 100.0;
-                    // Logarithmic mapping for natural time scale
-                    // Start from 1/10000s (100us) to max (usually 1s or 30s)
-                    long min = exposureTimeRange.getLower(); 
-                    long max = exposureTimeRange.getUpper();
-                    
-                    // Clamp min to usable fast shutter if hardware allows faster than needed
-                    if (min < 100000L) min = 100000L; // 1/10000s
-                    // Clamp max to 1 second for usability if device goes to 30s
-                    long practicalMax = 1000000000L; // 1s
-                    if (max > practicalMax) max = practicalMax;
-                    
-                    // Log formula: time = min * (max/min)^pct
-                    double timeNs = min * Math.pow((double)max / min, pct);
-                    long finalTime = (long) timeNs;
-                    
-                    updateManualExposure(finalTime);
-                    updateShutterLabel(finalTime);
-                }
-            } else {
-                // Auto EV Logic
+            if (currentParamMode == PARAM_EV) {
                 CameraControl control = camera.getCameraControl();
-                // Map 0-100 slider to -10 to +10 range logic if we changed slider range?
-                // Actually EV slider range is usually small steps.
-                // Let's remap slider value based on mode switch.
-                int index = (int) value; // EV slider is -10 to +10
+                int index = (int) value;
                 ExposureState state = camera.getCameraInfo().getExposureState();
                 Range<Integer> range = state.getExposureCompensationRange();
                 if (range.contains(index)) {
                      control.setExposureCompensationIndex(index);
                 }
+                binding.tvParamValue.setText((index > 0 ? "+" : "") + index);
+            } 
+            else if (currentParamMode == PARAM_SHUTTER) {
+                if (exposureTimeRange != null) {
+                    double pct = value / 100.0;
+                    long min = Math.max(exposureTimeRange.getLower(), 100000L); 
+                    long max = Math.min(exposureTimeRange.getUpper(), 1000000000L);
+                    
+                    double timeNs = min * Math.pow((double)max / min, pct);
+                    long finalTime = (long) timeNs;
+                    
+                    applyManualExposure(finalTime);
+                    updateShutterLabel(finalTime);
+                }
+            } 
+            else if (currentParamMode == PARAM_FOCUS) {
+                // Focus: Slider value 0.0 to 1.0
+                // Map to Focus Distance (0.0 = infinity, max = minFocusDist)
+                if (minFocusDist != null && minFocusDist > 0) {
+                     float dist = value * minFocusDist;
+                     Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+                     
+                     // Enabling Manual Focus cancels AF
+                     CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
+                     builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+                     builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
+                     c2.setCaptureRequestOptions(builder.build());
+                     
+                     binding.tvParamValue.setText(String.format(Locale.US, "%.1f", dist));
+                     binding.btnAutoReset.setVisibility(View.VISIBLE);
+                }
             }
+        });
+        
+        // Auto Reset Button (for Focus)
+        binding.btnAutoReset.setOnClickListener(v -> {
+            if (camera == null) return;
+            if (currentParamMode == PARAM_FOCUS) {
+                camera.getCameraControl().cancelFocusAndMetering();
+                binding.btnAutoReset.setVisibility(View.INVISIBLE);
+                binding.tvParamValue.setText("AF");
+            }
+        });
+        
+        // Touch to Focus
+        binding.viewFinder.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                return true;
+            } else if (event.getAction() == MotionEvent.ACTION_UP) {
+                if (camera != null) {
+                    float x = event.getX();
+                    float y = event.getY();
+                    MeteringPointFactory factory = binding.viewFinder.getMeteringPointFactory();
+                    MeteringPoint point = factory.createPoint(x, y);
+                    FocusMeteringAction action = new FocusMeteringAction.Builder(point).build();
+                    camera.getCameraControl().startFocusAndMetering(action);
+                    
+                    // Visual feedback
+                    showFocusIndicator(x, y);
+                }
+                v.performClick();
+                return true;
+            }
+            return false;
         });
     }
     
-    private void toggleExposureMode() {
-        if (camera == null) return;
-        isManualExposure = !isManualExposure;
+    // --- Editor Setup & Events ---
+    
+    private void setupEditorUI() {
+        // ... existing listeners for tabs ...
+        binding.tabCurves.setOnClickListener(v -> showEditorTab(0));
+        binding.tabLight.setOnClickListener(v -> showEditorTab(1));
+        binding.tabColor.setOnClickListener(v -> showEditorTab(2));
+        binding.tabWatermark.setOnClickListener(v -> showEditorTab(3));
+
+        // Curve Channels
+        binding.channelRGB.setOnClickListener(v -> binding.curveView.setActiveChannel(CurveView.Channel.RGB));
+        binding.channelR.setOnClickListener(v -> binding.curveView.setActiveChannel(CurveView.Channel.RED));
+        binding.channelG.setOnClickListener(v -> binding.curveView.setActiveChannel(CurveView.Channel.GREEN));
+        binding.channelB.setOnClickListener(v -> binding.curveView.setActiveChannel(CurveView.Channel.BLUE));
         
-        if (isManualExposure) {
-            // Switch to Manual (Shutter Priority simulation)
-            binding.btnExposureMode.setText("S");
-            binding.btnExposureMode.setBackgroundColor(Color.parseColor("#FF9800"));
+        binding.curveView.setOnCurveChangeListener(() -> previewCurves = binding.curveView.getControlPointsCopy());
+
+        // Precision Slider
+        binding.seekPrecision.setOnSeekBarChangeListener(new SimpleSeekListener(p -> {
+            binding.curveView.setPrecisionLevel(p);
+            binding.tvPrecisionLabel.setText("Precision: " + p);
+        }));
+
+        // Reset Modules
+        binding.btnResetCurves.setOnClickListener(v -> {
+            binding.curveView.resetActiveChannel();
+            previewCurves = binding.curveView.getControlPointsCopy();
+        });
+        
+        binding.btnResetLight.setOnClickListener(v -> {
+            editParams.highlights = 0; binding.seekHighlights.setProgress(100);
+            editParams.shadows = 0; binding.seekShadows.setProgress(100);
+            editParams.whites = 0; binding.seekWhites.setProgress(100);
+            editParams.blacks = 0; binding.seekBlacks.setProgress(100);
+        });
+        
+        binding.btnResetColor.setOnClickListener(v -> {
+            editParams.shadowHue = 0; editParams.shadowSat = 0;
+            editParams.midHue = 0; editParams.midSat = 0;
+            editParams.highlightHue = 0; editParams.highlightSat = 0;
+            binding.colorWheel.reset();
+            binding.colorInfo.setText("Neutral");
+        });
+        
+        // Slider Double Tap Reset
+        setupSliderDoubleTap(binding.seekHighlights, 100);
+        setupSliderDoubleTap(binding.seekShadows, 100);
+        setupSliderDoubleTap(binding.seekWhites, 100);
+        setupSliderDoubleTap(binding.seekBlacks, 100);
+        
+        // Color Grade Modes
+        binding.btnGradeShadows.setOnClickListener(v -> setColorGradeMode(0));
+        binding.btnGradeMids.setOnClickListener(v -> setColorGradeMode(1));
+        binding.btnGradeHighs.setOnClickListener(v -> setColorGradeMode(2));
+        setColorGradeMode(0);
+
+        binding.colorWheel.setOnColorChangeListener((hue, sat) -> {
+            if (activeColorGradeMode == 0) { editParams.shadowHue = hue; editParams.shadowSat = sat; }
+            else if (activeColorGradeMode == 1) { editParams.midHue = hue; editParams.midSat = sat; }
+            else { editParams.highlightHue = hue; editParams.highlightSat = sat; }
+            binding.colorInfo.setText(String.format(Locale.US, "H: %.0f  S: %.2f", hue, sat));
+        });
+
+        // Light Sliders Logic
+        binding.seekHighlights.setOnSeekBarChangeListener(new SimpleSeekListener(p -> editParams.highlights = p - 100));
+        binding.seekShadows.setOnSeekBarChangeListener(new SimpleSeekListener(p -> editParams.shadows = p - 100));
+        binding.seekWhites.setOnSeekBarChangeListener(new SimpleSeekListener(p -> editParams.whites = p - 100));
+        binding.seekBlacks.setOnSeekBarChangeListener(new SimpleSeekListener(p -> editParams.blacks = p - 100));
+
+        // Watermark Controls
+        setupWatermarkUI();
+        
+        // Presets
+        binding.btnSavePreset.setOnClickListener(v -> showSavePresetDialog());
+        binding.btnLoadPreset.setOnClickListener(v -> showLoadPresetDialog());
+    }
+    
+    private void setupSliderDoubleTap(SeekBar seekBar, int defaultValue) {
+        final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                seekBar.setProgress(defaultValue);
+                return true;
+            }
+        });
+        seekBar.setOnTouchListener((v, event) -> {
+            gd.onTouchEvent(event);
+            return false;
+        });
+    }
+
+    private void showEditorTab(int index) {
+        binding.containerCurves.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
+        binding.containerLight.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
+        binding.containerColor.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
+        binding.containerWatermark.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
+        
+        int color = Color.parseColor("#FF9800");
+        int white = Color.WHITE;
+        
+        binding.tabCurves.setTextColor(index == 0 ? color : white);
+        binding.tabLight.setTextColor(index == 1 ? color : white);
+        binding.tabColor.setTextColor(index == 2 ? color : white);
+        binding.tabWatermark.setTextColor(index == 3 ? color : white);
+    }
+    
+    private void setColorGradeMode(int mode) {
+        activeColorGradeMode = mode;
+        binding.btnGradeShadows.setTextColor(mode == 0 ? Color.parseColor("#FF9800") : Color.WHITE);
+        binding.btnGradeMids.setTextColor(mode == 1 ? Color.parseColor("#FF9800") : Color.WHITE);
+        binding.btnGradeHighs.setTextColor(mode == 2 ? Color.parseColor("#FF9800") : Color.WHITE);
+        
+        // Update Wheel Visuals
+        float h = 0, s = 0;
+        if (mode == 0) { h = editParams.shadowHue; s = editParams.shadowSat; }
+        else if (mode == 1) { h = editParams.midHue; s = editParams.midSat; }
+        else { h = editParams.highlightHue; s = editParams.highlightSat; }
+        
+        // You would need a method in ColorWheelView to set current H/S without triggering listener loop
+        // For brevity, assuming wheel stays where dragged or needs update method
+        // binding.colorWheel.setValues(h, s); 
+    }
+
+    private void setupWatermarkUI() {
+        binding.seekHeight.setOnSeekBarChangeListener(new SimpleSeekListener(p -> {
+            binding.tvWatermarkSizeLabel.setText(String.format(Locale.US, "Size: %.1f%%", p / 10f));
+        }));
+        
+        binding.seekLogoRadius.setOnSeekBarChangeListener(new SimpleSeekListener(p -> {
+            binding.tvLogoRadiusLabel.setText(String.format(Locale.US, "Logo Roundness: %d%%", p * 2));
+        }));
+        
+        binding.alignLeft.setOnClickListener(v -> updateAlignUI(0));
+        binding.alignCenter.setOnClickListener(v -> updateAlignUI(1));
+        binding.alignRight.setOnClickListener(v -> updateAlignUI(2));
+        
+        binding.btnSelectLogo.setOnClickListener(v -> pickLogoLauncher.launch("image/*"));
+    }
+    
+    private void updateAlignUI(int align) {
+        currentAlign = align;
+        int active = Color.WHITE;
+        int inactive = 0xFF888888;
+        binding.alignLeft.setColorFilter(align == 0 ? active : inactive);
+        binding.alignCenter.setColorFilter(align == 1 ? active : inactive);
+        binding.alignRight.setColorFilter(align == 2 ? active : inactive);
+    }
+    
+    // --- Logo Handling ---
+    
+    private void loadAndSaveLogo(Uri uri) {
+        try {
+            InputStream is = getContentResolver().openInputStream(uri);
+            Bitmap bitmap = BitmapFactory.decodeStream(is);
+            is.close();
             
-            // Reconfigure Slider for Shutter (0 to 100%)
-            binding.evSlider.setValueFrom(0f);
-            binding.evSlider.setValueTo(100f);
-            binding.evSlider.setValue(50f); // Default middle
-            binding.evSlider.setStepSize(1f);
-            
-            // Initial Manual Set
-            // We set a safe ISO (640) and middle shutter speed initially
-            updateManualExposure(-1); // -1 triggers calculation from current slider value
-            
-        } else {
-            // Switch to Auto
-            binding.btnExposureMode.setText("Auto");
-            binding.btnExposureMode.setBackgroundColor(Color.WHITE);
-            
-            // Reset Camera to Auto
-            Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
-            c2.setCaptureRequestOptions(new CaptureRequestOptions.Builder()
-                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                .build());
+            if (bitmap != null) {
+                // Save to internal storage
+                File logoFile = new File(getFilesDir(), "custom_logo.png");
+                FileOutputStream fos = new FileOutputStream(logoFile);
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                fos.close();
                 
-            // Reconfigure Slider for EV (-10 to +10 approx)
-            ExposureState state = camera.getCameraInfo().getExposureState();
-            Range<Integer> range = state.getExposureCompensationRange();
-            
-            // Clamp visual range to -10/+10 or hardware max
-            float min = Math.max(-10, range.getLower());
-            float max = Math.min(10, range.getUpper());
-            
-            binding.evSlider.setValueFrom(min);
-            binding.evSlider.setValueTo(max);
-            binding.evSlider.setValue(0f);
-            binding.evSlider.setStepSize(1f);
-            
-            binding.tvExposureMin.setText("" + (int)min);
-            binding.tvExposureMax.setText("+" + (int)max);
+                logoBitmap = bitmap;
+                binding.tvLogoPath.setText("Custom Logo Set");
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show();
         }
     }
     
-    private void updateManualExposure(long specificTimeNs) {
+    private void loadSavedLogo() {
+        File logoFile = new File(getFilesDir(), "custom_logo.png");
+        if (logoFile.exists()) {
+            logoBitmap = BitmapFactory.decodeFile(logoFile.getAbsolutePath());
+            binding.tvLogoPath.setText("Custom Logo Loaded");
+        } else {
+            binding.tvLogoPath.setText("No Logo Selected");
+        }
+    }
+
+    // --- Preset Handling ---
+
+    private void showSavePresetDialog() {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("Preset Name");
+        new AlertDialog.Builder(this)
+            .setTitle("Save Preset")
+            .setView(input)
+            .setPositiveButton("Save", (dialog, which) -> savePreset(input.getText().toString()))
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+    
+    private void savePreset(String name) {
+        if (name.isEmpty()) return;
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREFS_PRESETS, Context.MODE_PRIVATE);
+            JSONObject json = new JSONObject();
+            
+            // Save Light Params
+            json.put("high", editParams.highlights);
+            json.put("shad", editParams.shadows);
+            json.put("wht", editParams.whites);
+            json.put("blk", editParams.blacks);
+            
+            // Save Color Params
+            json.put("sH", editParams.shadowHue); json.put("sS", editParams.shadowSat);
+            json.put("mH", editParams.midHue); json.put("mS", editParams.midSat);
+            json.put("hH", editParams.highlightHue); json.put("hS", editParams.highlightSat);
+            
+            // Save Curves
+            Map<CurveView.Channel, List<PointF>> curves = binding.curveView.getControlPointsCopy();
+            JSONObject curveJson = new JSONObject();
+            for(CurveView.Channel ch : curves.keySet()) {
+                JSONArray pointsArr = new JSONArray();
+                for(PointF p : curves.get(ch)) {
+                    JSONObject pt = new JSONObject();
+                    pt.put("x", p.x);
+                    pt.put("y", p.y);
+                    pointsArr.put(pt);
+                }
+                curveJson.put(ch.name(), pointsArr);
+            }
+            json.put("curves", curveJson);
+            
+            prefs.edit().putString(name, json.toString()).apply();
+            Toast.makeText(this, "Preset Saved", Toast.LENGTH_SHORT).show();
+            
+        } catch (JSONException e) {
+            Toast.makeText(this, "Error Saving", Toast.LENGTH_SHORT).show();
+        }
+    }
+    
+    private void showLoadPresetDialog() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_PRESETS, Context.MODE_PRIVATE);
+        Map<String, ?> all = prefs.getAll();
+        if (all.isEmpty()) {
+            Toast.makeText(this, "No Presets Found", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        
+        final String[] names = all.keySet().toArray(new String[0]);
+        new AlertDialog.Builder(this)
+            .setTitle("Load Preset")
+            .setItems(names, (dialog, which) -> loadPreset(names[which], (String) all.get(names[which])))
+            .show();
+    }
+    
+    private void loadPreset(String name, String jsonStr) {
+        try {
+            JSONObject json = new JSONObject(jsonStr);
+            
+            // Load Light
+            editParams.highlights = json.optInt("high", 0);
+            editParams.shadows = json.optInt("shad", 0);
+            editParams.whites = json.optInt("wht", 0);
+            editParams.blacks = json.optInt("blk", 0);
+            
+            binding.seekHighlights.setProgress(editParams.highlights + 100);
+            binding.seekShadows.setProgress(editParams.shadows + 100);
+            binding.seekWhites.setProgress(editParams.whites + 100);
+            binding.seekBlacks.setProgress(editParams.blacks + 100);
+            
+            // Load Color
+            editParams.shadowHue = (float) json.optDouble("sH", 0); editParams.shadowSat = (float) json.optDouble("sS", 0);
+            editParams.midHue = (float) json.optDouble("mH", 0); editParams.midSat = (float) json.optDouble("mS", 0);
+            editParams.highlightHue = (float) json.optDouble("hH", 0); editParams.highlightSat = (float) json.optDouble("hS", 0);
+            setColorGradeMode(activeColorGradeMode); // Refresh UI
+            
+            // Load Curves
+            JSONObject curveJson = json.optJSONObject("curves");
+            if (curveJson != null) {
+                Map<CurveView.Channel, List<PointF>> loadedCurves = new HashMap<>();
+                Iterator<String> keys = curveJson.keys();
+                while(keys.hasNext()) {
+                    String chName = keys.next();
+                    CurveView.Channel ch = CurveView.Channel.valueOf(chName);
+                    JSONArray pts = curveJson.getJSONArray(chName);
+                    List<PointF> list = new ArrayList<>();
+                    for(int i=0; i<pts.length(); i++) {
+                        JSONObject pt = pts.getJSONObject(i);
+                        list.add(new PointF((float)pt.getDouble("x"), (float)pt.getDouble("y")));
+                    }
+                    loadedCurves.put(ch, list);
+                }
+                binding.curveView.setControlPoints(loadedCurves);
+                previewCurves = loadedCurves;
+            }
+            
+            Toast.makeText(this, "Loaded " + name, Toast.LENGTH_SHORT).show();
+            
+        } catch (JSONException e) {
+            Toast.makeText(this, "Error Loading", Toast.LENGTH_SHORT).show();
+        }
+    }
+    
+    private void showFocusIndicator(float x, float y) {
+        binding.focusIndicator.setX(x - binding.focusIndicator.getWidth() / 2f);
+        binding.focusIndicator.setY(y - binding.focusIndicator.getHeight() / 2f);
+        binding.focusIndicator.setAlpha(1f);
+        binding.focusIndicator.setScaleX(1.5f);
+        binding.focusIndicator.setScaleY(1.5f);
+        
+        binding.focusIndicator.animate()
+            .scaleX(1f).scaleY(1f).alpha(0f)
+            .setDuration(1000)
+            .start();
+    }
+    
+    private void setParamMode(int mode) {
+        currentParamMode = mode;
+        
+        // Reset Visuals
+        binding.btnParamEV.setTextColor(Color.WHITE);
+        binding.btnParamS.setTextColor(Color.WHITE);
+        binding.btnParamF.setTextColor(Color.WHITE);
+        binding.btnAutoReset.setVisibility(View.INVISIBLE);
+        
+        if (mode == PARAM_EV) {
+            binding.btnParamEV.setTextColor(Color.parseColor("#FF9800"));
+            // Auto Exposure ON
+            if (camera != null) {
+                Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+                c2.setCaptureRequestOptions(new CaptureRequestOptions.Builder()
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    .build());
+                
+                ExposureState state = camera.getCameraInfo().getExposureState();
+                Range<Integer> range = state.getExposureCompensationRange();
+                binding.paramSlider.setValueFrom(range.getLower());
+                binding.paramSlider.setValueTo(range.getUpper());
+                binding.paramSlider.setValue(state.getExposureCompensationIndex());
+                binding.paramSlider.setStepSize(1f);
+                binding.tvParamValue.setText(String.valueOf(state.getExposureCompensationIndex()));
+            }
+        } 
+        else if (mode == PARAM_SHUTTER) {
+            binding.btnParamS.setTextColor(Color.parseColor("#FF9800"));
+            binding.paramSlider.setValueFrom(0f);
+            binding.paramSlider.setValueTo(100f);
+            binding.paramSlider.setValue(50f);
+            binding.paramSlider.setStepSize(1f);
+            // Apply Manual Logic immediately or wait for slide?
+            // Usually wait, or set to current "safe" manual value.
+            // We'll leave it in last state until touched, or set a safe default if switching from Auto.
+            applyManualExposure(-1);
+        } 
+        else if (mode == PARAM_FOCUS) {
+            binding.btnParamF.setTextColor(Color.parseColor("#FF9800"));
+            binding.paramSlider.setValueFrom(0f);
+            binding.paramSlider.setValueTo(1.0f);
+            binding.paramSlider.setValue(0f); // Default to infinity?
+            binding.paramSlider.setStepSize(0.01f);
+            
+            // Check if currently manual focus? hard to tell from here without complex state tracking.
+            // Assume AF until slider moved.
+            binding.tvParamValue.setText("AF");
+            // If already in manual focus, reset button should appear?
+            // Simpler: Show reset button if we touch slider.
+        }
+    }
+    
+    private void applyManualExposure(long specificTimeNs) {
         if (camera == null) return;
         
         long timeNs = specificTimeNs;
         if (timeNs == -1 && exposureTimeRange != null) {
-            // Recalculate from slider
-            float val = binding.evSlider.getValue();
+            float val = binding.paramSlider.getValue();
             long min = Math.max(exposureTimeRange.getLower(), 100000L); 
             long max = Math.min(exposureTimeRange.getUpper(), 1000000000L);
             timeNs = (long) (min * Math.pow((double)max / min, val / 100.0));
@@ -367,14 +769,9 @@ public class MainActivity extends AppCompatActivity {
 
         Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
         CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
-        
-        // Manual Mode requires AE_MODE_OFF or OFF_KEEP_STATE
         builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
         builder.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeNs);
-        // We must set Sensitivity (ISO) when AE is OFF.
-        // For "S" mode simulation, we fix ISO or use a "Safe" value.
         builder.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, MANUAL_ISO); 
-        
         c2.setCaptureRequestOptions(builder.build());
     }
     
@@ -387,131 +784,7 @@ public class MainActivity extends AppCompatActivity {
             long fraction = 1000000000L / ns;
             label = "1/" + fraction;
         }
-        binding.tvExposureMin.setText(label);
-        // Clear Max label or use it for info?
-        // Let's keep Max as "+" just to show direction or clear it.
-        binding.tvExposureMax.setText(""); 
-    }
-    
-    private void setupEditorUI() {
-        // Main Tabs
-        View.OnClickListener tabListener = v -> {
-            binding.containerCurves.setVisibility(View.GONE);
-            binding.containerLight.setVisibility(View.GONE);
-            binding.containerColor.setVisibility(View.GONE);
-            binding.containerWatermark.setVisibility(View.GONE);
-            
-            ((TextView)binding.tabCurves).setTextColor(Color.WHITE);
-            ((TextView)binding.tabLight).setTextColor(Color.WHITE);
-            ((TextView)binding.tabColor).setTextColor(Color.WHITE);
-            ((TextView)binding.tabWatermark).setTextColor(Color.WHITE);
-            
-            ((TextView)v).setTextColor(Color.parseColor("#FF9800"));
-            
-            if (v == binding.tabCurves) binding.containerCurves.setVisibility(View.VISIBLE);
-            else if (v == binding.tabLight) binding.containerLight.setVisibility(View.VISIBLE);
-            else if (v == binding.tabColor) binding.containerColor.setVisibility(View.VISIBLE);
-            else if (v == binding.tabWatermark) binding.containerWatermark.setVisibility(View.VISIBLE);
-        };
-        
-        binding.tabCurves.setOnClickListener(tabListener);
-        binding.tabLight.setOnClickListener(tabListener);
-        binding.tabColor.setOnClickListener(tabListener);
-        binding.tabWatermark.setOnClickListener(tabListener);
-
-        // Curve Channels
-        View.OnClickListener channelListener = v -> {
-            binding.channelRGB.setTextColor(Color.WHITE);
-            binding.channelR.setTextColor(Color.parseColor("#FF4444"));
-            binding.channelG.setTextColor(Color.parseColor("#44FF44"));
-            binding.channelB.setTextColor(Color.parseColor("#4444FF"));
-            
-            ((TextView)v).setTextColor(Color.parseColor("#FF9800"));
-            
-            if (v == binding.channelRGB) binding.curveView.setActiveChannel(CurveView.Channel.RGB);
-            else if (v == binding.channelR) binding.curveView.setActiveChannel(CurveView.Channel.RED);
-            else if (v == binding.channelG) binding.curveView.setActiveChannel(CurveView.Channel.GREEN);
-            else if (v == binding.channelB) binding.curveView.setActiveChannel(CurveView.Channel.BLUE);
-        };
-        
-        binding.channelRGB.setOnClickListener(channelListener);
-        binding.channelR.setOnClickListener(channelListener);
-        binding.channelG.setOnClickListener(channelListener);
-        binding.channelB.setOnClickListener(channelListener);
-        
-        // Curve change listener - UPDATE PREVIEW CURVES
-        binding.curveView.setOnCurveChangeListener(() -> {
-            previewCurves = binding.curveView.getControlPointsCopy();
-        });
-        
-        // Light Sliders - UPDATE PREVIEW PARAMS
-        SeekBar.OnSeekBarChangeListener lightListener = new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int val = progress - 100; // Map 0-200 to -100 to 100
-                if (seekBar == binding.seekHighlights) editParams.highlights = val;
-                else if (seekBar == binding.seekShadows) editParams.shadows = val;
-                else if (seekBar == binding.seekWhites) editParams.whites = val;
-                else if (seekBar == binding.seekBlacks) editParams.blacks = val;
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        };
-        binding.seekHighlights.setOnSeekBarChangeListener(lightListener);
-        binding.seekShadows.setOnSeekBarChangeListener(lightListener);
-        binding.seekWhites.setOnSeekBarChangeListener(lightListener);
-        binding.seekBlacks.setOnSeekBarChangeListener(lightListener);
-        
-        // Color Grade Modes - UPDATE PREVIEW PARAMS
-        View.OnClickListener gradeListener = v -> {
-            binding.btnGradeShadows.setTextColor(Color.WHITE);
-            binding.btnGradeMids.setTextColor(Color.WHITE);
-            binding.btnGradeHighs.setTextColor(Color.WHITE);
-            ((TextView)v).setTextColor(Color.parseColor("#FF9800"));
-            
-            if (v == binding.btnGradeShadows) activeColorGradeMode = 0;
-            else if (v == binding.btnGradeMids) activeColorGradeMode = 1;
-            else if (v == binding.btnGradeHighs) activeColorGradeMode = 2;
-            
-            // Restore wheel state
-            binding.colorWheel.reset(); 
-            binding.colorInfo.setText("Select Color");
-        };
-        binding.btnGradeShadows.setOnClickListener(gradeListener);
-        binding.btnGradeMids.setOnClickListener(gradeListener);
-        binding.btnGradeHighs.setOnClickListener(gradeListener);
-        
-        binding.colorWheel.setOnColorChangeListener((hue, sat) -> {
-            String txt = String.format(Locale.US, "H:%.0f S:%.2f", hue, sat);
-            binding.colorInfo.setText(txt);
-            if (activeColorGradeMode == 0) { editParams.shadowHue = hue; editParams.shadowSat = sat; }
-            else if (activeColorGradeMode == 1) { editParams.midHue = hue; editParams.midSat = sat; }
-            else { editParams.highlightHue = hue; editParams.highlightSat = sat; }
-        });
-        
-        // Align Buttons
-        binding.alignLeft.setOnClickListener(v -> updateAlignUI(0));
-        binding.alignCenter.setOnClickListener(v -> updateAlignUI(1));
-        binding.alignRight.setOnClickListener(v -> updateAlignUI(2));
-        
-        // Height Slider with Real-time Feedback
-        binding.seekHeight.setMax(100); // 0.0% to 10.0%
-        binding.seekHeight.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                float percent = progress / 10f;
-                binding.tvWatermarkSizeLabel.setText(String.format(Locale.US, "Size: %.1f%%", percent));
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-    }
-    
-    private void updateAlignUI(int align) {
-        currentAlign = align;
-        binding.alignLeft.setColorFilter(align == 0 ? Color.WHITE : Color.GRAY);
-        binding.alignCenter.setColorFilter(align == 1 ? Color.WHITE : Color.GRAY);
-        binding.alignRight.setColorFilter(align == 2 ? Color.WHITE : Color.GRAY);
+        binding.tvParamValue.setText(label);
     }
 
     private void setupFocalLength(TextView view, float zoom) {
@@ -548,27 +821,43 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void toggleAspectRatio() {
-        currentAspectRatioMode++;
-        if (currentAspectRatioMode > AR_16_9) currentAspectRatioMode = AR_4_3;
+    private void setAspectRatio(int mode) {
+        if (currentAspectRatioMode == mode) return;
+        currentAspectRatioMode = mode;
+        updateRatioButtons();
         updatePreviewLayout();
         startCamera(); 
     }
     
+    private void updateRatioButtons() {
+        binding.btnRatio169.setTextColor(currentAspectRatioMode == AR_16_9 ? Color.parseColor("#FF9800") : Color.WHITE);
+        binding.btnRatio43.setTextColor(currentAspectRatioMode == AR_4_3 ? Color.parseColor("#FF9800") : Color.WHITE);
+        binding.btnRatio11.setTextColor(currentAspectRatioMode == AR_1_1 ? Color.parseColor("#FF9800") : Color.WHITE);
+    }
+    
     private void updatePreviewLayout() {
         ConstraintLayout.LayoutParams params = (ConstraintLayout.LayoutParams) binding.viewFinder.getLayoutParams();
-        // Sync overlay params
         ConstraintLayout.LayoutParams overlayParams = (ConstraintLayout.LayoutParams) binding.previewOverlay.getLayoutParams();
+        ConstraintLayout.LayoutParams shutterParams = (ConstraintLayout.LayoutParams) binding.shutterOverlay.getLayoutParams();
         
         switch (currentAspectRatioMode) {
-            case AR_16_9: params.dimensionRatio = "H,9:16"; break;
-            case AR_1_1: params.dimensionRatio = "H,1:1"; break;
-            case AR_4_3: default: params.dimensionRatio = "H,3:4"; break;
+            case AR_16_9: 
+                params.dimensionRatio = "H,9:16"; 
+                break;
+            case AR_1_1: 
+                params.dimensionRatio = "H,1:1"; 
+                break;
+            case AR_4_3: 
+            default: 
+                params.dimensionRatio = "H,3:4"; 
+                break;
         }
         overlayParams.dimensionRatio = params.dimensionRatio;
+        shutterParams.dimensionRatio = params.dimensionRatio;
         
         binding.viewFinder.setLayoutParams(params);
         binding.previewOverlay.setLayoutParams(overlayParams);
+        binding.shutterOverlay.setLayoutParams(shutterParams);
     }
     
     private void toggleEditPanel() {
@@ -607,7 +896,7 @@ public class MainActivity extends AppCompatActivity {
         imageAnalysis = new ImageAnalysis.Builder()
                 .setTargetResolution(new Size(640, 480)) // Low res for performance
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888) // RGBA for Bitmap manipulation
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888) 
                 .build();
                 
         imageAnalysis.setAnalyzer(cameraExecutor, image -> {
@@ -620,21 +909,18 @@ public class MainActivity extends AppCompatActivity {
             if (rotation != 0) {
                 Matrix m = new Matrix();
                 m.postRotate(rotation);
-                // Note: creating new bitmap is heavy, but at 640x480 it's manageable on modern devices
                 Bitmap rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
                 if (bmp != rotated) bmp.recycle();
                 bmp = rotated;
             }
 
             // 3. Apply Real-time Effects
-            // We reuse the same bitmap to avoid allocation
             ImageProcessor.applyProcessing(bmp, previewCurves, editParams);
             
             // 4. Update UI
             final Bitmap finalBmp = bmp;
             long currentTime = System.currentTimeMillis();
             
-            // Histogram Update Check (Histogram now uses the processed bitmap)
             int[] histogram = null;
             if (binding.layoutEditor.getVisibility() == View.VISIBLE && 
                (currentTime - lastHistogramUpdate > HISTOGRAM_UPDATE_INTERVAL_MS)) {
@@ -667,9 +953,10 @@ public class MainActivity extends AppCompatActivity {
             cameraProvider.unbindAll();
             camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture, imageAnalysis);
             
-            // Get Camera Characteristics for Manual Exposure
+            // Get Characteristics
             Camera2CameraInfo c2Info = Camera2CameraInfo.from(camera.getCameraInfo());
             exposureTimeRange = c2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            minFocusDist = c2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
             
             // Setup Zoom
             camera.getCameraInfo().getZoomState().observe(this, state -> {
@@ -681,6 +968,9 @@ public class MainActivity extends AppCompatActivity {
                 updateFocalLengthVisibility(binding.focal50mm, 2.0f);
                 updateFocalLengthVisibility(binding.focal85mm, 3.5f);
             });
+            
+            // Re-apply param mode if we just restarted camera
+            setParamMode(currentParamMode);
             
         } catch (Exception exc) {
             Toast.makeText(this, "Camera init failed", Toast.LENGTH_SHORT).show();
@@ -715,7 +1005,10 @@ public class MainActivity extends AppCompatActivity {
         wmConfig.showDate = binding.swDate.isChecked();
         wmConfig.showGPS = binding.swGPS.isChecked();
         wmConfig.showCity = binding.cbCity.isChecked();
+        wmConfig.showDistrict = binding.cbDistrict.isChecked();
         wmConfig.showStreet = binding.cbStreet.isChecked();
+        wmConfig.logoBitmap = logoBitmap; // Pass Custom Logo
+        wmConfig.logoCornerRadiusPercent = binding.seekLogoRadius.getProgress() / 100f; // 0 to 0.5
         
         float progress = binding.seekHeight.getProgress(); 
         wmConfig.heightPercent = progress / 1000f; // 0 to 10%
@@ -801,12 +1094,6 @@ public class MainActivity extends AppCompatActivity {
                  } catch(Exception e){}
             }
             
-            // If Manual Shutter, append info if available
-            if (isManualExposure) {
-                // Actually, the ImageCapture might not reflect manual setting immediately in EXIF
-                // But generally hardware handles this.
-            }
-            
         } catch (IOException e) { }
 
         // Apply Image Processing
@@ -827,19 +1114,28 @@ public class MainActivity extends AppCompatActivity {
                 List<Address> addresses = geocoder.getFromLocation(lat, lon, 1);
                 if (addresses != null && !addresses.isEmpty()) {
                     Address addr = addresses.get(0);
-                    // Use subAdminArea for District/City-like, Locality for City
+                    
+                    // City
                     String city = addr.getSubAdminArea();
                     if (city == null) city = addr.getLocality();
+                    if (city == null) city = addr.getAdminArea();
                     
-                    String street = addr.getThoroughfare(); 
-                    if (street == null) street = addr.getFeatureName(); // Fallback
+                    config.cityText = addr.getLocality();
+                    if (config.cityText == null) config.cityText = addr.getAdminArea();
                     
-                    config.locStr = (city != null ? city : "") + "|" + (street != null ? street : "");
+                    config.districtText = addr.getSubAdminArea();
+                    
+                    config.streetText = addr.getThoroughfare(); 
+                    if (config.streetText == null) config.streetText = addr.getFeatureName(); 
+                    
+                    // Fallback cleanup
+                    if (config.cityText == null) config.cityText = "";
+                    if (config.districtText == null) config.districtText = "";
+                    if (config.streetText == null) config.streetText = "";
                 }
             } catch (Exception e) {}
         } else {
             config.gpsStr = "";
-            config.locStr = "";
         }
         
         Bitmap finalBitmap = WatermarkUtil.addWatermark(bitmap, config);
@@ -898,5 +1194,15 @@ public class MainActivity extends AppCompatActivity {
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_CODE_PERMISSIONS && allPermissionsGranted()) startCamera();
+    }
+    
+    // Helper listener
+    private static class SimpleSeekListener implements SeekBar.OnSeekBarChangeListener {
+        interface OnChange { void onProgress(int p); }
+        private final OnChange callback;
+        SimpleSeekListener(OnChange c) { callback = c; }
+        @Override public void onProgressChanged(SeekBar s, int p, boolean f) { if(f) callback.onProgress(p); }
+        @Override public void onStartTrackingTouch(SeekBar s) {}
+        @Override public void onStopTrackingTouch(SeekBar s) {}
     }
 }

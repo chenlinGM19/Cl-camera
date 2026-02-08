@@ -7,14 +7,84 @@
     android:background="@android:color/black"
     tools:context=".MainActivity">
 
+    <!-- Top Toolbar -->
+    <LinearLayout
+        android:id="@+id/topBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:gravity="center_vertical"
+        android:background="#60000000"
+        android:elevation="10dp"
+        app:layout_constraintTop_toTopOf="parent">
+        
+        <TextView
+            android:text="PRO RAW"
+            android:textColor="#FF9800"
+            android:textStyle="bold"
+            android:textSize="16sp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="16dp"/>
+
+        <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
+        
+        <!-- Aspect Ratio Buttons -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:background="@drawable/bg_rounded_panel"
+            android:orientation="horizontal">
+            
+            <TextView
+                android:id="@+id/btnRatio16_9"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:text="16:9"
+                android:textColor="#FFF"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+                
+            <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#444" android:layout_marginVertical="6dp"/>
+
+            <TextView
+                android:id="@+id/btnRatio4_3"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:text="4:3"
+                android:textColor="#FF9800"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+
+            <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#444" android:layout_marginVertical="6dp"/>
+
+            <TextView
+                android:id="@+id/btnRatio1_1"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:text="1:1"
+                android:textColor="#FFF"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- Camera Preview (Hardware) -->
+    <!-- Constrained to TopBar bottom and Parent Bottom with bias=0 to align Top -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         app:layout_constraintDimensionRatio="3:4"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent" />
+        app:layout_constraintTop_toBottomOf="@id/topBar"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintVertical_bias="0.0" />
 
     <!-- Processed Preview Overlay (Software) -->
     <ImageView
@@ -26,41 +96,29 @@
         app:layout_constraintBottom_toBottomOf="@id/viewFinder"
         app:layout_constraintStart_toStartOf="@id/viewFinder"
         app:layout_constraintEnd_toEndOf="@id/viewFinder" />
+        
+    <!-- Focus Indicator (Simple Ring) -->
+    <View
+        android:id="@+id/focusIndicator"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:background="@drawable/bg_shutter"
+        android:alpha="0"
+        android:translationZ="10dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"/>
 
     <!-- Shutter Blackout Overlay -->
     <View
         android:id="@+id/shutterOverlay"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         android:background="#000000"
-        android:visibility="gone" />
-
-    <!-- Top Toolbar -->
-    <LinearLayout
-        android:id="@+id/topBar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:gravity="center_vertical"
-        android:background="#40000000"
-        app:layout_constraintTop_toTopOf="parent">
-        
-        <ImageView
-            android:id="@+id/btnAspectRatio"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_aspect_ratio"
-            app:tint="#FFFFFF" />
-            
-        <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
-        
-        <TextView
-            android:text="PRO RAW"
-            android:textColor="#FF9800"
-            android:textStyle="bold"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
-    </LinearLayout>
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/viewFinder"
+        app:layout_constraintBottom_toBottomOf="@id/viewFinder"
+        app:layout_constraintStart_toStartOf="@id/viewFinder"
+        app:layout_constraintEnd_toEndOf="@id/viewFinder" />
 
     <!-- Focal Length / Zoom Controls -->
     <LinearLayout
@@ -90,70 +148,104 @@
         android:background="#99000000"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Exposure Controls (Mode + Slider) -->
+        <!-- Parameter Selection & Slider -->
         <LinearLayout
-            android:id="@+id/evContainer"
+            android:id="@+id/paramContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
+            android:orientation="vertical"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="12dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="4dp"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toTopOf="@id/shutterContainer">
             
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnExposureMode"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:padding="0dp"
-                android:text="Auto"
-                android:textSize="11sp"
-                android:textColor="#000"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                app:backgroundTint="#FFF"
-                app:cornerRadius="18dp"
-                android:layout_marginEnd="8dp"/>
+            <!-- Param Tabs -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_marginBottom="8dp">
+                
+                <TextView 
+                    android:id="@+id/btnParamEV" 
+                    android:text="EV" 
+                    style="@style/ChannelBtn" 
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="#FF9800"/>
+                    
+                <TextView 
+                    android:id="@+id/btnParamS" 
+                    android:text="S" 
+                    style="@style/ChannelBtn" 
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="#FFFFFF"/>
+                    
+                <TextView 
+                    android:id="@+id/btnParamF" 
+                    android:text="F" 
+                    style="@style/ChannelBtn" 
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="#FFFFFF"/>
+            </LinearLayout>
 
-            <TextView 
-                android:id="@+id/tvExposureMin"
-                android:layout_width="40dp"
+            <!-- Slider Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="-10" 
-                android:gravity="center"
-                android:textColor="#FFF" 
-                android:textSize="10sp"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
                 
-            <com.google.android.material.slider.Slider
-                android:id="@+id/evSlider"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:valueFrom="-10.0"
-                android:valueTo="10.0"
-                android:stepSize="1.0"
-                android:value="0.0"
-                app:thumbColor="#FF9800"
-                app:trackColorActive="#FF9800"
-                app:trackColorInactive="#888888"
-                app:tickVisible="false"/>
+                <TextView 
+                    android:id="@+id/tvParamValue"
+                    android:layout_width="50dp"
+                    android:layout_height="wrap_content"
+                    android:text="0.0" 
+                    android:gravity="center"
+                    android:textColor="#FF9800" 
+                    android:textStyle="bold"
+                    android:textSize="12sp"/>
+                    
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/paramSlider"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:valueFrom="-10.0"
+                    android:valueTo="10.0"
+                    android:stepSize="1.0"
+                    android:value="0.0"
+                    app:thumbColor="#FF9800"
+                    app:trackColorActive="#FF9800"
+                    app:trackColorInactive="#888888"
+                    app:tickVisible="false"/>
                 
-            <TextView 
-                android:id="@+id/tvExposureMax"
-                android:layout_width="40dp"
-                android:layout_height="wrap_content"
-                android:text="+10" 
-                android:gravity="center"
-                android:textColor="#FFF" 
-                android:textSize="10sp"/>
+                <!-- Auto Reset Button (Visible for Focus mainly) -->
+                 <TextView 
+                    android:id="@+id/btnAutoReset"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="AUTO" 
+                    android:padding="8dp"
+                    android:background="@drawable/bg_rounded_panel"
+                    android:textColor="#FFF" 
+                    android:textSize="10sp"
+                    android:visibility="invisible"/>
+            </LinearLayout>
         </LinearLayout>
 
         <androidx.constraintlayout.widget.ConstraintLayout
             android:id="@+id/shutterContainer"
             android:layout_width="match_parent"
             android:layout_height="120dp"
-            app:layout_constraintTop_toBottomOf="@id/evContainer"
+            app:layout_constraintTop_toBottomOf="@id/paramContainer"
             app:layout_constraintBottom_toBottomOf="parent">
 
             <!-- Thumbnail / Gallery -->
@@ -219,13 +311,42 @@
     <LinearLayout
         android:id="@+id/layoutEditor"
         android:layout_width="match_parent"
-        android:layout_height="380dp"
+        android:layout_height="450dp"
         android:orientation="vertical"
         android:background="#F0000000"
         android:clickable="true"
         android:focusable="true"
         android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@id/bottomBar">
+        
+        <!-- Global Presets Controls -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="4dp"
+            android:gravity="end">
+            
+            <TextView
+                android:id="@+id/btnSavePreset"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Save Preset"
+                android:textColor="#FF9800"
+                android:textSize="12sp"
+                android:padding="8dp"/>
+                
+            <TextView
+                android:id="@+id/btnLoadPreset"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Load Preset"
+                android:textColor="#FF9800"
+                android:textSize="12sp"
+                android:padding="8dp"
+                android:layout_marginStart="16dp"/>
+        </LinearLayout>
 
         <!-- Tab Headers -->
         <HorizontalScrollView 
@@ -237,10 +358,10 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:padding="8dp">
-                <TextView android:id="@+id/tabCurves" android:text="Curves" style="@style/ChannelBtn" android:textColor="#FF9800"/>
-                <TextView android:id="@+id/tabLight" android:text="Light" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
-                <TextView android:id="@+id/tabColor" android:text="Color" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
-                <TextView android:id="@+id/tabWatermark" android:text="Watermark" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/tabCurves" android:text="Curves" style="@style/ChannelBtn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="12dp" android:textColor="#FF9800"/>
+                <TextView android:id="@+id/tabLight" android:text="Light" style="@style/ChannelBtn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="12dp" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/tabColor" android:text="Color" style="@style/ChannelBtn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="12dp" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/tabWatermark" android:text="Watermark" style="@style/ChannelBtn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="12dp" android:textColor="#FFFFFF"/>
             </LinearLayout>
         </HorizontalScrollView>
 
@@ -258,10 +379,17 @@
                 android:orientation="horizontal"
                 android:layout_marginBottom="8dp"
                 android:gravity="center">
-                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:textColor="#FFFFFF"/>
-                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:textColor="#FF4444"/>
-                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:textColor="#44FF44"/>
-                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:textColor="#4444FF"/>
+                <TextView android:id="@+id/channelRGB" android:text="RGB" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FFFFFF"/>
+                <TextView android:id="@+id/channelR" android:text="Red" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FF4444"/>
+                <TextView android:id="@+id/channelG" android:text="Green" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#44FF44"/>
+                <TextView android:id="@+id/channelB" android:text="Blue" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#4444FF"/>
+                <ImageView 
+                    android:id="@+id/btnResetCurves" 
+                    android:src="@android:drawable/ic_menu_revert" 
+                    app:tint="#888"
+                    android:padding="8dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"/>
             </LinearLayout>
 
             <com.camulator.pro.ui.CurveView
@@ -270,6 +398,33 @@
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 android:background="#222"/>
+                
+            <!-- Precision Slider -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp">
+                <TextView
+                    android:id="@+id/tvPrecisionLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Precision: 0"
+                    android:textColor="#888"
+                    android:textSize="10sp"
+                    android:layout_marginEnd="8dp"
+                    android:minWidth="60dp"/>
+                <SeekBar
+                    android:id="@+id/seekPrecision"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:max="5"
+                    android:progress="0"
+                    android:progressTint="#888"
+                    android:thumbTint="#AAA"/>
+            </LinearLayout>
         </LinearLayout>
 
         <!-- 2. Light Container (Sliders) -->
@@ -281,17 +436,26 @@
             android:padding="16dp">
             <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
                 
-                <TextView android:text="Highlights" style="@style/EditorLabel"/>
-                <SeekBar android:id="@+id/seekHighlights" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+                <LinearLayout 
+                    android:layout_width="match_parent" 
+                    android:layout_height="wrap_content" 
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+                    <TextView android:text="Light Adjustment" android:textColor="#888" android:textStyle="bold" android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content"/>
+                    <ImageView android:id="@+id/btnResetLight" android:src="@android:drawable/ic_menu_revert" app:tint="#888" android:layout_width="32dp" android:layout_height="32dp"/>
+                </LinearLayout>
 
-                <TextView android:text="Shadows" style="@style/EditorLabel"/>
-                <SeekBar android:id="@+id/seekShadows" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+                <TextView android:text="Highlights" style="@style/EditorLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                <SeekBar android:id="@+id/seekHighlights" android:max="200" android:progress="100" style="@style/EditorSlider" android:layout_width="match_parent" android:layout_height="wrap_content"/>
 
-                <TextView android:text="Whites" style="@style/EditorLabel"/>
-                <SeekBar android:id="@+id/seekWhites" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+                <TextView android:text="Shadows" style="@style/EditorLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                <SeekBar android:id="@+id/seekShadows" android:max="200" android:progress="100" style="@style/EditorSlider" android:layout_width="match_parent" android:layout_height="wrap_content"/>
 
-                <TextView android:text="Blacks" style="@style/EditorLabel"/>
-                <SeekBar android:id="@+id/seekBlacks" android:max="200" android:progress="100" style="@style/EditorSlider"/>
+                <TextView android:text="Whites" style="@style/EditorLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                <SeekBar android:id="@+id/seekWhites" android:max="200" android:progress="100" style="@style/EditorSlider" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+                <TextView android:text="Blacks" style="@style/EditorLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                <SeekBar android:id="@+id/seekBlacks" android:max="200" android:progress="100" style="@style/EditorSlider" android:layout_width="match_parent" android:layout_height="wrap_content"/>
             </LinearLayout>
         </ScrollView>
 
@@ -305,9 +469,10 @@
             android:padding="8dp">
             
             <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center">
-                 <TextView android:id="@+id/btnGradeShadows" android:text="Shadows" style="@style/ChannelBtn" android:textColor="#FF9800"/>
-                 <TextView android:id="@+id/btnGradeMids" android:text="Midtones" style="@style/ChannelBtn" android:textColor="#FFF"/>
-                 <TextView android:id="@+id/btnGradeHighs" android:text="Highlights" style="@style/ChannelBtn" android:textColor="#FFF"/>
+                 <TextView android:id="@+id/btnGradeShadows" android:text="Shadows" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FF9800"/>
+                 <TextView android:id="@+id/btnGradeMids" android:text="Midtones" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FFF"/>
+                 <TextView android:id="@+id/btnGradeHighs" android:text="Highlights" style="@style/ChannelBtn" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:textColor="#FFF"/>
+                 <ImageView android:id="@+id/btnResetColor" android:src="@android:drawable/ic_menu_revert" app:tint="#888" android:padding="8dp" android:layout_width="40dp" android:layout_height="40dp"/>
             </LinearLayout>
 
             <com.camulator.pro.ui.ColorWheelView
@@ -346,6 +511,51 @@
                     android:text="Show Logo/Text"
                     android:checked="true"
                     android:textColor="#FFF"/>
+                
+                <!-- Logo Image Picker -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="4dp">
+                    <Button
+                        android:id="@+id/btnSelectLogo"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:text="Select Logo Image"
+                        android:textSize="10sp"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:textColor="#FF9800"
+                        app:strokeColor="#FF9800"/>
+                    <TextView
+                        android:id="@+id/tvLogoPath"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:text="Default Text"
+                        android:layout_marginStart="8dp"
+                        android:textSize="10sp"
+                        android:textColor="#888"/>
+                </LinearLayout>
+
+                <TextView 
+                    android:id="@+id/tvLogoRadiusLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Logo Roundness: 0%" 
+                    android:textColor="#CCC" 
+                    android:textSize="12sp" 
+                    android:layout_marginTop="0dp"/>
+                <SeekBar
+                    android:id="@+id/seekLogoRadius"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="50"
+                    android:progress="0"
+                    android:layout_marginBottom="8dp"/>
+
                 <com.google.android.material.switchmaterial.SwitchMaterial
                     android:id="@+id/swDate"
                     android:layout_width="match_parent"
@@ -377,7 +587,15 @@
                         android:layout_width="0dp"
                         android:layout_weight="1"
                         android:layout_height="wrap_content"
-                        android:text="City/District"
+                        android:text="City"
+                        android:checked="true"
+                        android:textColor="#FFF"/>
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/cbDistrict"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:text="District"
                         android:checked="true"
                         android:textColor="#FFF"/>
                     <com.google.android.material.checkbox.MaterialCheckBox
@@ -385,7 +603,7 @@
                         android:layout_width="0dp"
                         android:layout_weight="1"
                         android:layout_height="wrap_content"
-                        android:text="Street Name"
+                        android:text="Street"
                         android:checked="false"
                         android:textColor="#FFF"/>
                 </LinearLayout>
@@ -447,7 +665,7 @@
                 <TextView 
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Logo Text" 
+                    android:text="Logo Text (Ignored if Image Selected)" 
                     android:textColor="#CCC" 
                     android:textSize="12sp" 
                     android:layout_marginTop="8dp"/>

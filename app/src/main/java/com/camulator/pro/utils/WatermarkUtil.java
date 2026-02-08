@@ -5,6 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Rect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -23,13 +25,21 @@ public class WatermarkUtil {
         public boolean showDate = true;
         public boolean showGPS = true;
         public boolean showCity = true;
+        public boolean showDistrict = true;
         public boolean showStreet = false;
         
         public String dateStr = "";
         public String gpsStr = ""; // Coordinates
-        public String locStr = ""; // City/Street text
+        public String cityText = "";
+        public String districtText = "";
+        public String streetText = "";
+        
         public String exifInfo = ""; // Shutter, ISO, Aperture, Focal Length
         public boolean shouldCrop1to1 = false;
+        
+        // Custom Logo Image
+        public Bitmap logoBitmap = null;
+        public float logoCornerRadiusPercent = 0f; // 0.0 to 0.5 (0% to 50%)
     }
 
     public static Bitmap addWatermark(Bitmap src, WatermarkConfig config) {
@@ -37,12 +47,8 @@ public class WatermarkUtil {
         int h = src.getHeight();
         
         // 1. Calculate Layout Dimensions
-        // Use max dimension to keep scale consistent across orientations
         int refDim = Math.max(w, h);
-        
-        // Calculate Footer Height directly from percent (0% - 10%)
         int footerHeight = (int) (refDim * config.heightPercent);
-        
         int outputH = config.isFooterMode ? h + footerHeight : h;
         
         Bitmap output = Bitmap.createBitmap(w, outputH, Bitmap.Config.ARGB_8888);
@@ -52,7 +58,7 @@ public class WatermarkUtil {
         canvas.drawBitmap(src, 0, 0, null);
         
         // 3. Setup Colors
-        int bgColor = config.isWhiteBg ? 0xFFFFFFFF : 0xFF121212; // Softer black
+        int bgColor = config.isWhiteBg ? 0xFFFFFFFF : 0xFF121212; 
         int mainTextColor = config.isWhiteBg ? 0xFF000000 : 0xFFFFFFFF;
         int subTextColor = config.isWhiteBg ? 0xFF666666 : 0xFFAAAAAA;
         int dividerColor = config.isWhiteBg ? 0xFFDDDDDD : 0xFF333333;
@@ -68,7 +74,6 @@ public class WatermarkUtil {
             if (config.isFooterMode) {
                 canvas.drawRect(0, h, w, outputH, bgPaint);
             } else {
-                // High-quality gradient for overlay
                 Paint scrimPaint = new Paint();
                 scrimPaint.setShader(new LinearGradient(
                         0, h - (footerHeight * 1.5f), 
@@ -86,46 +91,33 @@ public class WatermarkUtil {
         
         // 5. Prepare Text Content
         String titleText = config.showLogo ? (config.customText.isEmpty() ? "Camulator Pro" : config.customText) : "";
-        String modelText = android.os.Build.MODEL.toUpperCase();
         
-        // Build Meta Text (Date | GPS | Loc)
         StringBuilder metaBuilder = new StringBuilder();
-        
-        if (config.showDate && !config.dateStr.isEmpty()) {
-            metaBuilder.append(config.dateStr);
-        }
-        
+        if (config.showDate && !config.dateStr.isEmpty()) metaBuilder.append(config.dateStr);
         if (config.showGPS && !config.gpsStr.isEmpty()) {
             if (metaBuilder.length() > 0) metaBuilder.append("  |  ");
             metaBuilder.append(config.gpsStr);
         }
         
-        // Build Location String based on flags
-        String fullLoc = "";
-        if (config.showCity || config.showStreet) {
-            String[] parts = config.locStr.split("\\|"); // Expecting "City|Street" format or similar
-            String city = parts.length > 0 ? parts[0] : config.locStr;
-            String street = parts.length > 1 ? parts[1] : "";
-            
-            StringBuilder locBuilder = new StringBuilder();
-            if (config.showCity && !city.isEmpty()) locBuilder.append(city);
-            if (config.showStreet && !street.isEmpty()) {
-                if (locBuilder.length() > 0) locBuilder.append(", ");
-                locBuilder.append(street);
-            }
-            fullLoc = locBuilder.toString();
+        StringBuilder locBuilder = new StringBuilder();
+        if (config.showCity && !config.cityText.isEmpty()) locBuilder.append(config.cityText);
+        if (config.showDistrict && !config.districtText.isEmpty()) {
+            if (locBuilder.length() > 0) locBuilder.append(", ");
+            locBuilder.append(config.districtText);
         }
-        
-        if (!fullLoc.isEmpty()) {
+        if (config.showStreet && !config.streetText.isEmpty()) {
+            if (locBuilder.length() > 0) locBuilder.append(", ");
+            locBuilder.append(config.streetText);
+        }
+        if (locBuilder.length() > 0) {
             if (metaBuilder.length() > 0) metaBuilder.append("  |  ");
-            metaBuilder.append(fullLoc);
+            metaBuilder.append(locBuilder.toString());
         }
         
         String metaText = metaBuilder.toString();
-        String exifText = config.exifInfo;
-        if (exifText.isEmpty()) exifText = "RAW";
+        String exifText = config.exifInfo.isEmpty() ? "RAW" : config.exifInfo;
 
-        // 6. Dynamic Font Sizing
+        // 6. Sizing & Paints
         float containerH = footerHeight;
         if (containerH <= 0) return output;
 
@@ -155,6 +147,9 @@ public class WatermarkUtil {
         Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         dividerPaint.setColor(dividerColor);
         dividerPaint.setStrokeWidth(Math.max(1f, w * 0.002f));
+        
+        Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bitmapPaint.setFilterBitmap(true);
 
         if (!config.isFooterMode) {
             titlePaint.setShadowLayer(6, 0, 2, 0x88000000);
@@ -173,7 +168,7 @@ public class WatermarkUtil {
         Paint.FontMetrics metaFm = metaPaint.getFontMetrics();
         float metaCapHeight = Math.abs(metaFm.ascent);
 
-        // --- Layout Logic ---
+        // --- Drawing ---
 
         if (config.align == 1) { 
             // === CENTER ALIGN ===
@@ -186,8 +181,14 @@ public class WatermarkUtil {
             float blockStartY = centerY - (blockH / 2f);
             
             if (config.showLogo) {
-                blockStartY += titleCapHeight;
-                canvas.drawText(titleText, w / 2f, blockStartY, titlePaint);
+                if (config.logoBitmap != null) {
+                    // Draw Image Logo Centered
+                    drawLogo(canvas, config.logoBitmap, w/2f, blockStartY + titleCapHeight/2f, titleCapHeight * 1.5f, 1, bitmapPaint, config.logoCornerRadiusPercent);
+                    blockStartY += (titleCapHeight * 0.5f); // Adjust spacing slightly for image
+                } else {
+                    blockStartY += titleCapHeight;
+                    canvas.drawText(titleText, w / 2f, blockStartY, titlePaint);
+                }
             }
             
             String combinedInfo = exifText + (metaText.isEmpty() ? "" : "  •  " + metaText);
@@ -201,7 +202,13 @@ public class WatermarkUtil {
             exifPaint.setTextAlign(Paint.Align.RIGHT);
             metaPaint.setTextAlign(Paint.Align.RIGHT);
             
-            if (config.showLogo) canvas.drawText(titleText, rightX, centerY - (containerH * 0.1f), titlePaint);
+            if (config.showLogo) {
+                if (config.logoBitmap != null) {
+                    drawLogo(canvas, config.logoBitmap, rightX, centerY - (containerH * 0.1f), titleCapHeight * 1.5f, 2, bitmapPaint, config.logoCornerRadiusPercent);
+                } else {
+                    canvas.drawText(titleText, rightX, centerY - (containerH * 0.1f), titlePaint);
+                }
+            }
             canvas.drawText(exifText + " | " + metaText, rightX, centerY + (containerH * 0.25f), metaPaint);
 
         } else {
@@ -209,11 +216,20 @@ public class WatermarkUtil {
             float leftX = paddingEdge;
             float rightX = w - paddingEdge;
             
-            // 1. Left Title
+            // 1. Left Title / Logo
             titlePaint.setTextAlign(Paint.Align.LEFT);
+            float logoWidth = 0;
+            
             if (config.showLogo) {
                 float titleY = centerY + (titleCapHeight / 2f) - (titleFm.descent / 2f);
-                canvas.drawText(titleText, leftX, titleY, titlePaint);
+                if (config.logoBitmap != null) {
+                    // Draw Image Logo
+                    float targetH = containerH * 0.5f; // 50% of footer height
+                    logoWidth = drawLogo(canvas, config.logoBitmap, leftX, centerY, targetH, 0, bitmapPaint, config.logoCornerRadiusPercent);
+                } else {
+                    canvas.drawText(titleText, leftX, titleY, titlePaint);
+                    logoWidth = titlePaint.measureText(titleText);
+                }
             }
             
             // 2. Right Data
@@ -222,18 +238,16 @@ public class WatermarkUtil {
             
             float gap = containerH * 0.12f;
             float rightBlockH = exifCapHeight + gap + metaCapHeight;
-            
             float exifY = centerY - (rightBlockH / 2f) + exifCapHeight;
             float metaY = exifY + gap + metaCapHeight * 0.8f;
             
             canvas.drawText(exifText, rightX, exifY, exifPaint);
             canvas.drawText(metaText, rightX, metaY, metaPaint);
             
-            // 3. Vertical Divider (Only if Title exists)
+            // 3. Vertical Divider
             if (config.isFooterMode && config.showLogo) {
-                float titleWidth = titlePaint.measureText(titleText);
                 float maxRightW = Math.max(exifPaint.measureText(exifText), metaPaint.measureText(metaText));
-                float dividerX = leftX + titleWidth + (w * 0.06f);
+                float dividerX = leftX + logoWidth + (w * 0.06f);
                 
                 if (dividerX < (rightX - maxRightW - (w * 0.04f))) {
                     float lineH = containerH * 0.55f;
@@ -241,7 +255,37 @@ public class WatermarkUtil {
                 }
             }
         }
-
         return output;
+    }
+    
+    // Helper to draw logo maintaining aspect ratio
+    // align: 0=Left(anchor left), 1=Center(anchor center), 2=Right(anchor right)
+    // cornerPercent: 0.0 (square) to 0.5 (circle/pill)
+    // returns width of drawn image
+    private static float drawLogo(Canvas canvas, Bitmap logo, float x, float y, float targetHeight, int align, Paint paint, float cornerPercent) {
+        float ratio = (float) logo.getWidth() / logo.getHeight();
+        float targetWidth = targetHeight * ratio;
+        
+        float left = x;
+        if (align == 1) left = x - targetWidth/2f;
+        if (align == 2) left = x - targetWidth;
+        
+        float top = y - targetHeight/2f;
+        
+        RectF dst = new RectF(left, top, left+targetWidth, top+targetHeight);
+        
+        if (cornerPercent > 0) {
+            canvas.save();
+            Path path = new Path();
+            float radius = Math.min(dst.width(), dst.height()) * cornerPercent;
+            path.addRoundRect(dst, radius, radius, Path.Direction.CW);
+            canvas.clipPath(path);
+            canvas.drawBitmap(logo, null, dst, paint);
+            canvas.restore();
+        } else {
+            canvas.drawBitmap(logo, null, dst, paint);
+        }
+        
+        return targetWidth;
     }
 }
