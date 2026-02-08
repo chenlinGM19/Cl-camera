@@ -56,8 +56,6 @@ import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.MeteringPoint;
 import androidx.camera.core.MeteringPointFactory;
 import androidx.camera.core.Preview;
-import androidx.camera.core.ResolutionSelector;
-import androidx.camera.core.AspectRatioStrategy;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.app.ActivityCompat;
@@ -534,6 +532,11 @@ public class MainActivity extends AppCompatActivity {
                 }
                 return true;
             }
+
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true; // Crucial for gesture detector to receive following events
+            }
         });
         
         slider.setOnTouchListener((v, event) -> {
@@ -548,6 +551,10 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
                 seekBar.setProgress(defaultValue);
+                return true;
+            }
+            @Override
+            public boolean onDown(MotionEvent e) {
                 return true;
             }
         });
