@@ -244,16 +244,7 @@ public class WatermarkUtil {
             canvas.drawText(exifText, rightX, exifY, exifPaint);
             canvas.drawText(metaText, rightX, metaY, metaPaint);
             
-            // 3. Vertical Divider
-            if (config.isFooterMode && config.showLogo) {
-                float maxRightW = Math.max(exifPaint.measureText(exifText), metaPaint.measureText(metaText));
-                float dividerX = leftX + logoWidth + (w * 0.06f);
-                
-                if (dividerX < (rightX - maxRightW - (w * 0.04f))) {
-                    float lineH = containerH * 0.55f;
-                    canvas.drawLine(dividerX, centerY - lineH/2f, dividerX, centerY + lineH/2f, dividerPaint);
-                }
-            }
+            // 3. Vertical Divider - REMOVED per user request
         }
         return output;
     }

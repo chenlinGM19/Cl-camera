@@ -76,7 +76,6 @@
     </LinearLayout>
 
     <!-- Camera Preview (Hardware) -->
-    <!-- Constrained to TopBar bottom and Parent Bottom with bias=0 to align Top -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
@@ -97,7 +96,7 @@
         app:layout_constraintStart_toStartOf="@id/viewFinder"
         app:layout_constraintEnd_toEndOf="@id/viewFinder" />
         
-    <!-- Focus Indicator (Simple Ring) -->
+    <!-- Focus Indicator -->
     <View
         android:id="@+id/focusIndicator"
         android:layout_width="60dp"
@@ -148,95 +147,133 @@
         android:background="#99000000"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <!-- Parameter Selection & Slider -->
+        <!-- 3 Independent Sliders: EV, Shutter, Focus -->
         <LinearLayout
             android:id="@+id/paramContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingHorizontal="16dp"
-            android:paddingTop="12dp"
+            android:paddingHorizontal="12dp"
+            android:paddingTop="8dp"
             android:paddingBottom="4dp"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toTopOf="@id/shutterContainer">
-            
-            <!-- Param Tabs -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center"
-                android:layout_marginBottom="8dp">
-                
-                <TextView 
-                    android:id="@+id/btnParamEV" 
-                    android:text="EV" 
-                    style="@style/ChannelBtn" 
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:textColor="#FF9800"/>
-                    
-                <TextView 
-                    android:id="@+id/btnParamS" 
-                    android:text="S" 
-                    style="@style/ChannelBtn" 
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:textColor="#FFFFFF"/>
-                    
-                <TextView 
-                    android:id="@+id/btnParamF" 
-                    android:text="F" 
-                    style="@style/ChannelBtn" 
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:textColor="#FFFFFF"/>
-            </LinearLayout>
 
-            <!-- Slider Row -->
+            <!-- EV Row -->
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-                
+                android:layout_height="32dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
                 <TextView 
-                    android:id="@+id/tvParamValue"
-                    android:layout_width="50dp"
-                    android:layout_height="wrap_content"
-                    android:text="0.0" 
-                    android:gravity="center"
+                    android:text="EV" 
                     android:textColor="#FF9800" 
                     android:textStyle="bold"
-                    android:textSize="12sp"/>
-                    
+                    android:textSize="12sp"
+                    android:layout_width="30dp"
+                    android:layout_height="wrap_content"/>
+                <TextView
+                    android:id="@+id/tvValEV"
+                    android:text="0.0"
+                    android:textColor="#FFF"
+                    android:textSize="10sp"
+                    android:layout_width="40dp"
+                    android:gravity="center"
+                    android:layout_height="wrap_content"/>
                 <com.google.android.material.slider.Slider
-                    android:id="@+id/paramSlider"
+                    android:id="@+id/sliderEV"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:layout_height="wrap_content"
                     android:valueFrom="-10.0"
                     android:valueTo="10.0"
                     android:stepSize="1.0"
                     android:value="0.0"
                     app:thumbColor="#FF9800"
                     app:trackColorActive="#FF9800"
-                    app:trackColorInactive="#888888"
+                    app:trackColorInactive="#888"
                     app:tickVisible="false"/>
-                
-                <!-- Auto Reset Button (Visible for Focus mainly) -->
-                 <TextView 
-                    android:id="@+id/btnAutoReset"
+            </LinearLayout>
+
+            <!-- Shutter Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView 
+                    android:text="S" 
+                    android:textColor="#FFF" 
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:layout_width="30dp"
+                    android:layout_height="wrap_content"/>
+                <TextView
+                    android:id="@+id/tvValS"
+                    android:text="Auto"
+                    android:textColor="#FFF"
+                    android:textSize="10sp"
+                    android:layout_width="40dp"
+                    android:gravity="center"
+                    android:layout_height="wrap_content"/>
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderS"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:valueFrom="0.0"
+                    android:valueTo="100.0"
+                    android:value="0.0"
+                    app:thumbColor="#FFF"
+                    app:trackColorActive="#FFF"
+                    app:trackColorInactive="#888"
+                    app:tickVisible="false"/>
+            </LinearLayout>
+
+            <!-- Focus Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView 
+                    android:text="F" 
+                    android:textColor="#FFF" 
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:layout_width="30dp"
+                    android:layout_height="wrap_content"/>
+                <TextView
+                    android:id="@+id/tvValF"
+                    android:text="AF"
+                    android:textColor="#FFF"
+                    android:textSize="10sp"
+                    android:layout_width="40dp"
+                    android:gravity="center"
+                    android:layout_height="wrap_content"/>
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderF"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:valueFrom="0.0"
+                    android:valueTo="1.0"
+                    android:value="0.0"
+                    app:thumbColor="#FFF"
+                    app:trackColorActive="#FFF"
+                    app:trackColorInactive="#888"
+                    app:tickVisible="false"/>
+                <TextView 
+                    android:id="@+id/btnResetFocus"
+                    android:text="AUTO" 
+                    android:textColor="#FF9800"
+                    android:background="@drawable/bg_rounded_panel"
+                    android:padding="4dp"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:layout_marginStart="8dp"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="AUTO" 
-                    android:padding="8dp"
-                    android:background="@drawable/bg_rounded_panel"
-                    android:textColor="#FFF" 
-                    android:textSize="10sp"
                     android:visibility="invisible"/>
             </LinearLayout>
         </LinearLayout>

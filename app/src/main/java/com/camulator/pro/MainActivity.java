@@ -31,6 +31,7 @@ import android.util.Size;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -55,6 +56,8 @@ import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.MeteringPoint;
 import androidx.camera.core.MeteringPointFactory;
 import androidx.camera.core.Preview;
+import androidx.camera.core.ResolutionSelector;
+import androidx.camera.core.AspectRatioStrategy;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.app.ActivityCompat;
@@ -134,16 +137,10 @@ public class MainActivity extends AppCompatActivity {
     
     private final List<TextView> focalViews = new ArrayList<>();
     
-    // Control Modes
-    private static final int PARAM_EV = 0;
-    private static final int PARAM_SHUTTER = 1;
-    private static final int PARAM_FOCUS = 2;
-    private int currentParamMode = PARAM_EV;
-
     // Manual State
     private Range<Long> exposureTimeRange;
+    private Range<Integer> isoRange;
     private Float minFocusDist = 0f;
-    private static final int MANUAL_ISO = 640; 
     
     // Logo Picker
     private ActivityResultLauncher<String> pickLogoLauncher;
@@ -305,67 +302,30 @@ public class MainActivity extends AppCompatActivity {
         
         binding.btnEdit.setOnClickListener(v -> toggleEditPanel());
         
-        // Parameter Mode Selection
-        binding.btnParamEV.setOnClickListener(v -> setParamMode(PARAM_EV));
-        binding.btnParamS.setOnClickListener(v -> setParamMode(PARAM_SHUTTER));
-        binding.btnParamF.setOnClickListener(v -> setParamMode(PARAM_FOCUS));
-        setParamMode(PARAM_EV); // Init default
+        // --- Exposure & Focus Sliders ---
         
-        // Shared Slider Listener
-        binding.paramSlider.addOnChangeListener((slider, value, fromUser) -> {
+        // EV Slider
+        binding.sliderEV.addOnChangeListener((slider, value, fromUser) -> updateCameraExposure());
+        
+        // Shutter Slider
+        binding.sliderS.addOnChangeListener((slider, value, fromUser) -> updateCameraExposure());
+
+        // Focus Slider
+        binding.sliderF.addOnChangeListener((slider, value, fromUser) -> updateCameraFocus());
+
+        // Auto Focus Reset
+        binding.btnResetFocus.setOnClickListener(v -> {
             if (camera == null) return;
-            
-            if (currentParamMode == PARAM_EV) {
-                CameraControl control = camera.getCameraControl();
-                int index = (int) value;
-                ExposureState state = camera.getCameraInfo().getExposureState();
-                Range<Integer> range = state.getExposureCompensationRange();
-                if (range.contains(index)) {
-                     control.setExposureCompensationIndex(index);
-                }
-                binding.tvParamValue.setText((index > 0 ? "+" : "") + index);
-            } 
-            else if (currentParamMode == PARAM_SHUTTER) {
-                if (exposureTimeRange != null) {
-                    double pct = value / 100.0;
-                    long min = Math.max(exposureTimeRange.getLower(), 100000L); 
-                    long max = Math.min(exposureTimeRange.getUpper(), 1000000000L);
-                    
-                    double timeNs = min * Math.pow((double)max / min, pct);
-                    long finalTime = (long) timeNs;
-                    
-                    applyManualExposure(finalTime);
-                    updateShutterLabel(finalTime);
-                }
-            } 
-            else if (currentParamMode == PARAM_FOCUS) {
-                // Focus: Slider value 0.0 to 1.0
-                // Map to Focus Distance (0.0 = infinity, max = minFocusDist)
-                if (minFocusDist != null && minFocusDist > 0) {
-                     float dist = value * minFocusDist;
-                     Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
-                     
-                     // Enabling Manual Focus cancels AF
-                     CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
-                     builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
-                     builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
-                     c2.setCaptureRequestOptions(builder.build());
-                     
-                     binding.tvParamValue.setText(String.format(Locale.US, "%.1f", dist));
-                     binding.btnAutoReset.setVisibility(View.VISIBLE);
-                }
-            }
+            camera.getCameraControl().cancelFocusAndMetering();
+            binding.btnResetFocus.setVisibility(View.INVISIBLE);
+            binding.tvValF.setText("AF");
+            binding.sliderF.setValue(0f);
         });
         
-        // Auto Reset Button (for Focus)
-        binding.btnAutoReset.setOnClickListener(v -> {
-            if (camera == null) return;
-            if (currentParamMode == PARAM_FOCUS) {
-                camera.getCameraControl().cancelFocusAndMetering();
-                binding.btnAutoReset.setVisibility(View.INVISIBLE);
-                binding.tvParamValue.setText("AF");
-            }
-        });
+        // Double Tap Resets
+        setupSliderDoubleTap(binding.sliderEV, 0.0f);
+        setupSliderDoubleTap(binding.sliderS, 0.0f);
+        setupSliderDoubleTap(binding.sliderF, 0.0f); // Resets to Auto Focus logic
         
         // Touch to Focus
         binding.viewFinder.setOnTouchListener((v, event) -> {
@@ -380,7 +340,11 @@ public class MainActivity extends AppCompatActivity {
                     FocusMeteringAction action = new FocusMeteringAction.Builder(point).build();
                     camera.getCameraControl().startFocusAndMetering(action);
                     
-                    // Visual feedback
+                    binding.btnResetFocus.setVisibility(View.INVISIBLE);
+                    binding.tvValF.setText("AF");
+                    // Don't reset slider F visual to 0 immediately to avoid jump, or set to 0 to indicate Auto
+                    binding.sliderF.setValue(0f);
+                    
                     showFocusIndicator(x, y);
                 }
                 v.performClick();
@@ -388,6 +352,97 @@ public class MainActivity extends AppCompatActivity {
             }
             return false;
         });
+    }
+
+    private void updateCameraExposure() {
+        if (camera == null) return;
+        
+        float evValue = binding.sliderEV.getValue();
+        float shutterValue = binding.sliderS.getValue(); // 0 to 100
+        
+        Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+        CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
+        
+        if (shutterValue == 0f) {
+            // --- AUTO MODE ---
+            // Shutter is Auto. EV Slider controls Exposure Compensation.
+            binding.tvValS.setText("Auto");
+            
+            // Set AE Mode ON
+            builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+            
+            // Apply EV Compensation
+            int evIndex = (int) evValue;
+            // Clamp to valid range
+            ExposureState state = camera.getCameraInfo().getExposureState();
+            Range<Integer> range = state.getExposureCompensationRange();
+            if (range.contains(evIndex)) {
+                camera.getCameraControl().setExposureCompensationIndex(evIndex);
+            }
+            binding.tvValEV.setText((evIndex > 0 ? "+" : "") + evIndex);
+            
+        } else {
+            // --- MANUAL SHUTTER MODE ---
+            // Shutter is Manual. EV Slider controls ISO (Sensitivity).
+            
+            // Calculate Shutter Time
+            if (exposureTimeRange != null) {
+                double pct = shutterValue / 100.0;
+                long min = Math.max(exposureTimeRange.getLower(), 100000L); 
+                long max = Math.min(exposureTimeRange.getUpper(), 1000000000L); // Cap at 1s for usability
+                double timeNs = min * Math.pow((double)max / min, pct);
+                long finalTime = (long) timeNs;
+                
+                builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+                builder.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, finalTime);
+                
+                // Calculate ISO from EV Slider (-10 to 10)
+                // Map EV range to a reasonable ISO range (e.g., 100 to 6400)
+                // Base ISO at EV 0 = 640. 
+                int baseIso = 640;
+                // Simple power of 2 mapping roughly
+                int targetIso = (int) (baseIso * Math.pow(1.4, evValue)); // 1.4 approx sqrt(2) per stop
+                
+                // Clamp ISO
+                if (isoRange != null) {
+                    targetIso = Math.max(isoRange.getLower(), Math.min(isoRange.getUpper(), targetIso));
+                } else {
+                    targetIso = Math.max(100, Math.min(6400, targetIso)); // Fallback
+                }
+                
+                builder.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, targetIso);
+                
+                updateShutterLabel(finalTime);
+                binding.tvValEV.setText("ISO " + targetIso);
+            }
+        }
+        
+        c2.setCaptureRequestOptions(builder.build());
+    }
+    
+    private void updateCameraFocus() {
+        if (camera == null) return;
+        float val = binding.sliderF.getValue();
+        
+        if (val == 0f) {
+            // Treat 0 as "Auto" intent if dragged there? 
+            // Or just allow very far focus. 
+            // Usually explicit button handles Auto. 
+            // For now, allow 0 to be infinity.
+        }
+        
+        if (minFocusDist != null && minFocusDist > 0) {
+             float dist = val * minFocusDist;
+             Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
+             
+             CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
+             builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+             builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
+             c2.setCaptureRequestOptions(builder.build());
+             
+             binding.tvValF.setText(String.format(Locale.US, "%.1f", dist));
+             binding.btnResetFocus.setVisibility(View.VISIBLE);
+        }
     }
     
     // --- Editor Setup & Events ---
@@ -434,11 +489,11 @@ public class MainActivity extends AppCompatActivity {
             binding.colorInfo.setText("Neutral");
         });
         
-        // Slider Double Tap Reset
-        setupSliderDoubleTap(binding.seekHighlights, 100);
-        setupSliderDoubleTap(binding.seekShadows, 100);
-        setupSliderDoubleTap(binding.seekWhites, 100);
-        setupSliderDoubleTap(binding.seekBlacks, 100);
+        // Slider Double Tap Reset (Editor Sliders)
+        setupDoubleTapForSeekBar(binding.seekHighlights, 100);
+        setupDoubleTapForSeekBar(binding.seekShadows, 100);
+        setupDoubleTapForSeekBar(binding.seekWhites, 100);
+        setupDoubleTapForSeekBar(binding.seekBlacks, 100);
         
         // Color Grade Modes
         binding.btnGradeShadows.setOnClickListener(v -> setColorGradeMode(0));
@@ -467,7 +522,28 @@ public class MainActivity extends AppCompatActivity {
         binding.btnLoadPreset.setOnClickListener(v -> showLoadPresetDialog());
     }
     
-    private void setupSliderDoubleTap(SeekBar seekBar, int defaultValue) {
+    // Generic Double Tap Helper for Material Sliders
+    private void setupSliderDoubleTap(Slider slider, float defaultValue) {
+        final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                slider.setValue(defaultValue);
+                // Trigger listener if needed, but setValue usually triggers change listener
+                if (slider == binding.sliderF) {
+                    binding.btnResetFocus.performClick(); // Specific logic for Focus
+                }
+                return true;
+            }
+        });
+        
+        slider.setOnTouchListener((v, event) -> {
+            gd.onTouchEvent(event);
+            return false; // Propagate event so slider still slides
+        });
+    }
+
+    // Helper for regular SeekBars (Editor)
+    private void setupDoubleTapForSeekBar(SeekBar seekBar, int defaultValue) {
         final GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
@@ -501,16 +577,6 @@ public class MainActivity extends AppCompatActivity {
         binding.btnGradeShadows.setTextColor(mode == 0 ? Color.parseColor("#FF9800") : Color.WHITE);
         binding.btnGradeMids.setTextColor(mode == 1 ? Color.parseColor("#FF9800") : Color.WHITE);
         binding.btnGradeHighs.setTextColor(mode == 2 ? Color.parseColor("#FF9800") : Color.WHITE);
-        
-        // Update Wheel Visuals
-        float h = 0, s = 0;
-        if (mode == 0) { h = editParams.shadowHue; s = editParams.shadowSat; }
-        else if (mode == 1) { h = editParams.midHue; s = editParams.midSat; }
-        else { h = editParams.highlightHue; s = editParams.highlightSat; }
-        
-        // You would need a method in ColorWheelView to set current H/S without triggering listener loop
-        // For brevity, assuming wheel stays where dragged or needs update method
-        // binding.colorWheel.setValues(h, s); 
     }
 
     private void setupWatermarkUI() {
@@ -700,81 +766,6 @@ public class MainActivity extends AppCompatActivity {
             .start();
     }
     
-    private void setParamMode(int mode) {
-        currentParamMode = mode;
-        
-        // Reset Visuals
-        binding.btnParamEV.setTextColor(Color.WHITE);
-        binding.btnParamS.setTextColor(Color.WHITE);
-        binding.btnParamF.setTextColor(Color.WHITE);
-        binding.btnAutoReset.setVisibility(View.INVISIBLE);
-        
-        if (mode == PARAM_EV) {
-            binding.btnParamEV.setTextColor(Color.parseColor("#FF9800"));
-            // Auto Exposure ON
-            if (camera != null) {
-                Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
-                c2.setCaptureRequestOptions(new CaptureRequestOptions.Builder()
-                    .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    .build());
-                
-                ExposureState state = camera.getCameraInfo().getExposureState();
-                Range<Integer> range = state.getExposureCompensationRange();
-                binding.paramSlider.setValueFrom(range.getLower());
-                binding.paramSlider.setValueTo(range.getUpper());
-                binding.paramSlider.setValue(state.getExposureCompensationIndex());
-                binding.paramSlider.setStepSize(1f);
-                binding.tvParamValue.setText(String.valueOf(state.getExposureCompensationIndex()));
-            }
-        } 
-        else if (mode == PARAM_SHUTTER) {
-            binding.btnParamS.setTextColor(Color.parseColor("#FF9800"));
-            binding.paramSlider.setValueFrom(0f);
-            binding.paramSlider.setValueTo(100f);
-            binding.paramSlider.setValue(50f);
-            binding.paramSlider.setStepSize(1f);
-            // Apply Manual Logic immediately or wait for slide?
-            // Usually wait, or set to current "safe" manual value.
-            // We'll leave it in last state until touched, or set a safe default if switching from Auto.
-            applyManualExposure(-1);
-        } 
-        else if (mode == PARAM_FOCUS) {
-            binding.btnParamF.setTextColor(Color.parseColor("#FF9800"));
-            binding.paramSlider.setValueFrom(0f);
-            binding.paramSlider.setValueTo(1.0f);
-            binding.paramSlider.setValue(0f); // Default to infinity?
-            binding.paramSlider.setStepSize(0.01f);
-            
-            // Check if currently manual focus? hard to tell from here without complex state tracking.
-            // Assume AF until slider moved.
-            binding.tvParamValue.setText("AF");
-            // If already in manual focus, reset button should appear?
-            // Simpler: Show reset button if we touch slider.
-        }
-    }
-    
-    private void applyManualExposure(long specificTimeNs) {
-        if (camera == null) return;
-        
-        long timeNs = specificTimeNs;
-        if (timeNs == -1 && exposureTimeRange != null) {
-            float val = binding.paramSlider.getValue();
-            long min = Math.max(exposureTimeRange.getLower(), 100000L); 
-            long max = Math.min(exposureTimeRange.getUpper(), 1000000000L);
-            timeNs = (long) (min * Math.pow((double)max / min, val / 100.0));
-            updateShutterLabel(timeNs);
-        }
-        
-        if (timeNs <= 0) return;
-
-        Camera2CameraControl c2 = Camera2CameraControl.from(camera.getCameraControl());
-        CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
-        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
-        builder.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeNs);
-        builder.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, MANUAL_ISO); 
-        c2.setCaptureRequestOptions(builder.build());
-    }
-    
     private void updateShutterLabel(long ns) {
         String label;
         if (ns >= 1000000000L) {
@@ -784,7 +775,7 @@ public class MainActivity extends AppCompatActivity {
             long fraction = 1000000000L / ns;
             label = "1/" + fraction;
         }
-        binding.tvParamValue.setText(label);
+        binding.tvValS.setText(label);
     }
 
     private void setupFocalLength(TextView view, float zoom) {
@@ -840,23 +831,35 @@ public class MainActivity extends AppCompatActivity {
         ConstraintLayout.LayoutParams overlayParams = (ConstraintLayout.LayoutParams) binding.previewOverlay.getLayoutParams();
         ConstraintLayout.LayoutParams shutterParams = (ConstraintLayout.LayoutParams) binding.shutterOverlay.getLayoutParams();
         
+        String ratioString;
+        ImageView.ScaleType scaleType;
+
         switch (currentAspectRatioMode) {
             case AR_16_9: 
-                params.dimensionRatio = "H,9:16"; 
+                ratioString = "H,9:16"; 
+                scaleType = ImageView.ScaleType.CENTER_CROP; // Hardware preview is usually 16:9, matching is easy
                 break;
             case AR_1_1: 
-                params.dimensionRatio = "H,1:1"; 
+                ratioString = "H,1:1"; 
+                scaleType = ImageView.ScaleType.CENTER_CROP;
                 break;
             case AR_4_3: 
             default: 
-                params.dimensionRatio = "H,3:4"; 
+                ratioString = "H,3:4"; 
+                scaleType = ImageView.ScaleType.FIT_CENTER; // Standard photo size
                 break;
         }
-        overlayParams.dimensionRatio = params.dimensionRatio;
-        shutterParams.dimensionRatio = params.dimensionRatio;
+        
+        params.dimensionRatio = ratioString;
+        overlayParams.dimensionRatio = ratioString;
+        shutterParams.dimensionRatio = ratioString;
         
         binding.viewFinder.setLayoutParams(params);
+        binding.viewFinder.setScaleType(androidx.camera.view.PreviewView.ScaleType.FIT_CENTER);
+        
         binding.previewOverlay.setLayoutParams(overlayParams);
+        binding.previewOverlay.setScaleType(scaleType);
+        
         binding.shutterOverlay.setLayoutParams(shutterParams);
     }
     
@@ -884,7 +887,9 @@ public class MainActivity extends AppCompatActivity {
         
         int targetAspectRatio = (currentAspectRatioMode == AR_16_9) ? AspectRatio.RATIO_16_9 : AspectRatio.RATIO_4_3;
 
-        Preview preview = new Preview.Builder().setTargetAspectRatio(targetAspectRatio).build();
+        Preview preview = new Preview.Builder()
+                .setTargetAspectRatio(targetAspectRatio)
+                .build();
         preview.setSurfaceProvider(binding.viewFinder.getSurfaceProvider());
 
         imageCapture = new ImageCapture.Builder()
@@ -893,11 +898,16 @@ public class MainActivity extends AppCompatActivity {
                 .build();
                 
         // Real-time processing setup
-        imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480)) // Low res for performance
+        // IMPORTANT: targetAspectRatio MUST match imageCapture to ensure WYSIWYG
+        ImageAnalysis.Builder analysisBuilder = new ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888) 
-                .build();
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setTargetAspectRatio(targetAspectRatio);
+        
+        // Use ResolutionSelector for finer control if available, or fallback to default aspect ratio matching
+        // In this setup, matching AspectRatio is critical for overlay alignment.
+        
+        imageAnalysis = analysisBuilder.build();
                 
         imageAnalysis.setAnalyzer(cameraExecutor, image -> {
             // 1. Convert to Bitmap
@@ -913,7 +923,7 @@ public class MainActivity extends AppCompatActivity {
                 if (bmp != rotated) bmp.recycle();
                 bmp = rotated;
             }
-
+            
             // 3. Apply Real-time Effects
             ImageProcessor.applyProcessing(bmp, previewCurves, editParams);
             
@@ -956,6 +966,7 @@ public class MainActivity extends AppCompatActivity {
             // Get Characteristics
             Camera2CameraInfo c2Info = Camera2CameraInfo.from(camera.getCameraInfo());
             exposureTimeRange = c2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            isoRange = c2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
             minFocusDist = c2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
             
             // Setup Zoom
@@ -969,8 +980,20 @@ public class MainActivity extends AppCompatActivity {
                 updateFocalLengthVisibility(binding.focal85mm, 3.5f);
             });
             
-            // Re-apply param mode if we just restarted camera
-            setParamMode(currentParamMode);
+            // Reset Sliders for new camera binding
+            binding.sliderEV.setValue(0f);
+            binding.sliderS.setValue(0f);
+            binding.sliderF.setValue(0f);
+            binding.tvValEV.setText("0");
+            binding.tvValS.setText("Auto");
+            binding.tvValF.setText("AF");
+            
+            // Init EV slider range based on capabilities
+            ExposureState state = camera.getCameraInfo().getExposureState();
+            Range<Integer> range = state.getExposureCompensationRange();
+            binding.sliderEV.setValueFrom(range.getLower());
+            binding.sliderEV.setValueTo(range.getUpper());
+            binding.sliderEV.setStepSize(1f);
             
         } catch (Exception exc) {
             Toast.makeText(this, "Camera init failed", Toast.LENGTH_SHORT).show();
